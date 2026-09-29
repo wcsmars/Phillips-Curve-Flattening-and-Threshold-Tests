@@ -1,4 +1,4 @@
-# Nonlinear Phillips Curve Analysis
+# Phillips Curve Flattening and Threshold Tests
 
 An empirical study of U.S. inflation and labor-market tightness through 2026Q1.
 The Python pipeline compares linear and kinked Phillips curves, estimates
@@ -14,19 +14,26 @@ curve that looked flat before 2020 is nonlinear rather than absent.
 ## Results
 
 The saved results use a June 12, 2026 data vintage recorded with the original
-local inputs. The long sample begins in 1960; the vacancy-based models
-use 101 quarters from 2001Q1 to 2026Q1.
+local inputs. The long-sample regressions begin in 1960, and the rolling
+60-quarter windows draw on data from 1955Q1. The vacancy-based models use 101
+quarters from 2001Q1 to 2026Q1.
 
 | Comparison | Saved estimate |
 | --- | --- |
 | Unemployment-gap slope, 1960–1989 vs. 1990–2019 | −0.5554 vs. −0.0011 |
-| Quandt–Andrews slope-break date, 1960–2019 | 1983Q2; sup-Wald 16.21 vs. 1% critical value 12.35 |
-| Linear vacancy/unemployment slope, 2001–2026 | 1.106 (t = 4.15) |
+| Quandt–Andrews slope-break date, 1960–2019 | 1983Q2; sup-Wald 16.21 vs. asymptotic 1% critical value 12.35; block-bootstrap p = 0.03 |
+| Linear vacancy/unemployment slope, 2001–2026 | 1.106 (t = 4.14) |
 | Estimated vacancy/unemployment kink | 1.18; the approximate LR search set spans the whole 0.40–1.40 grid |
 | Slope above / slope below the kink | 3.59 |
-| Bootstrap test of linearity | p = 0.2084; linearity is not rejected |
+| Bootstrap test of linearity | p = 0.21; linearity is not rejected |
 | Holdout RMSE, trained through 2022Q4 (2023Q1–2026Q1), linear vs. kinked | 0.883 vs. 0.795 percentage points |
 | Holdout RMSE, trained through 2019Q4 (2020Q1–2026Q1), linear vs. kinked | 1.808 vs. 1.814; the trained kink sits at the 0.40 grid edge |
+
+The slope break is clear, but the asymptotic critical values overstate its
+significance in a sample of this size. A moving-block bootstrap of the
+no-break model puts the p-value at 0.032 with the saved seed. A one-off check
+outside the pipeline gave 0.016 to 0.034 across 300 other seeds, so the break
+is significant at 5% but not at 1%.
 
 Both holdout comparisons re-estimate each model, including the threshold, on
 the training quarters only, then project with realized expectations,
@@ -41,12 +48,25 @@ nearly equal.
 
 In the fitted decomposition, cooling labor-market tightness accounts for
 roughly 63% of the inflation decline between the 2022Q2–Q4 and
-2025Q1–2026Q1 averages. This is model-based accounting, not a causal estimate.
-Expectations proxies materially affect the estimated curve shape.
+2025Q1–2026Q1 averages. This is model-based accounting, not a causal estimate,
+and the linear model, which the bootstrap does not reject, attributes a
+smaller share to tightness. Expectations proxies materially affect the
+estimated curve shape: with Michigan household expectations, five of six
+specifications put the kink near 0.43–0.44 and lose the steeper upper slope.
 
 See [model estimates](results/results.json),
 [decomposition](results/decomposition.csv), and
-[holdout comparison](figures/fig7_oos.png).
+[2023–2026 holdout projections](figures/fig7_oos.png).
+
+| Figure | Shows |
+| --- | --- |
+| [fig1_inflation_history.png](figures/fig1_inflation_history.png) | Headline and core CPI inflation with recession shading |
+| [fig2_pc_scatter_eras.png](figures/fig2_pc_scatter_eras.png) | Inflation surprises against the unemployment gap, fitted by era |
+| [fig3_rolling_slope.png](figures/fig3_rolling_slope.png) | Rolling 60-quarter unemployment-gap slope with a 90% band |
+| [fig4_vu_timeseries.png](figures/fig4_vu_timeseries.png) | The vacancy/unemployment ratio against the estimated kink |
+| [fig5_kink_scatter.png](figures/fig5_kink_scatter.png) | The supply-adjusted inflation gap against v/u with the kinked fit |
+| [fig6_decomposition.png](figures/fig6_decomposition.png) | Fitted contributions to core inflation, 2020Q1–2026Q1 (kinked model) |
+| [fig7_oos.png](figures/fig7_oos.png) | Projections of the linear and kinked models trained through 2022Q4, 2023Q1–2026Q1 |
 
 ## Run
 
@@ -60,9 +80,11 @@ python -m unittest discover -s tests -v
 python code/04_tables.py
 ```
 
-The tests and table generation work offline with the bundled results. Tests
-use synthetic data to check quarterly transformations and validate accounting
-and holdout metrics. On Windows, activate with `.venv\Scripts\activate`.
+On Windows, create the environment with `py -3.11 -m venv .venv` and activate
+it with `.venv\Scripts\activate`. The tests and table generation work
+offline with the bundled results. Tests use synthetic data to check quarterly
+transformations, run the full estimation on a planted kink, and validate
+accounting, holdout metrics and the estimates quoted in the Results section.
 
 For estimation and figure regeneration, obtain the source inputs first:
 
@@ -71,10 +93,12 @@ python code/00_fetch_data.py
 sh code/run_all.sh
 ```
 
-The downloader obtains the current source vintage and skips existing input
-files. Use `--force` only when deliberately refreshing them. Downloads and
-processed datasets are local and ignored by Git. Network access is needed
-for downloading; no API key is required.
+The downloader obtains the current source vintage and reuses existing valid
+input files. Use `--force` only when deliberately refreshing them. A refresh
+validates every requested series before it replaces any file, and it refuses
+a download that covers a shorter history than the file it would replace.
+Downloads and processed datasets are local and ignored by Git. Network access
+is needed for downloading; no API key is required.
 
 The full pipeline has been checked against the original local inputs and
 reproduces the saved estimates. Live acquisition was checked for UNRATE and
@@ -84,12 +108,15 @@ New downloads may revise historical values, so a fresh run can differ from
 the bundled results. Exact numerical replication requires the original input
 vintage, which is not included. The analysis end date stays fixed at 2026Q1;
 refreshing inputs does not extend the study. Running the pipeline overwrites
-the saved results and figures in the checkout.
+the saved results and figures in the checkout. Regenerated PNG files can
+differ byte for byte under another Pillow or zlib build even when every pixel
+is identical.
 
 The order is `01_build_dataset.py` → `02_analysis.py` → `03_figures.py` →
 `04_tables.py`. Each script resolves paths from its own location. On Windows,
 run those four scripts with `python` in that order. Estimation includes 499
-bootstrap replications and can take a few minutes.
+linearity-bootstrap and 1,999 slope-break-bootstrap replications and takes
+under a minute on a typical laptop.
 
 ### Offline demo on synthetic data
 
@@ -110,7 +137,8 @@ known threshold. With the default seed and the pinned packages it estimated
 value. Figure and table titles still describe the U.S. study, but every
 number in `demo/` is synthetic. Use `--prepare-only` to write the inputs
 without estimating, and `--seed` to draw a different sample. The demo takes
-under a minute.
+under a minute. With `--check` it exits with an error unless the default run
+recovers the planted kink; CI runs it this way.
 
 ## Data and method
 
@@ -125,12 +153,24 @@ Series are downloaded from FRED's CSV endpoint and retain their source
 identifiers. The [Michigan expectations series](https://fred.stlouisfed.org/series/MICH)
 is attributed to Surveys of Consumers, University of Michigan, via FRED.
 The [Global Supply Chain Pressure Index](https://www.newyorkfed.org/research/policy/gscpi)
-comes from the Federal Reserve Bank of New York. Download provenance records
+comes from the Federal Reserve Bank of New York, and the 1-year and 10-year
+expected inflation series (EXPINF1YR, EXPINF10YR) come from the Federal
+Reserve Bank of Cleveland via FRED. Download provenance records
 the URLs, retrieval time, and file checksums locally. Consult each source for
 its usage terms.
 
-Monthly observations are averaged within calendar quarters. Inflation is
-`400 × log(Pq / Pq−1)` for quarterly annualized rates and
+Monthly observations are averaged within calendar quarters, and the build
+step lists any quarter averaged from fewer than three months. The source files
+have no October 2025 value for CPIAUCSL, CPILFESL, CPIENGSL, UNRATE or
+UNEMPLOY, because BLS did not collect them during the federal shutdown. Their
+2025Q4 values therefore average November and December. Compared with
+interpolating October, this raises annualized 2025Q4 inflation and lowers
+2026Q1 inflation by about 0.37 percentage points for headline CPI and 0.28 for
+core CPI. In a one-off check outside the pipeline, interpolating October moved
+no estimate in the Results table by more than 0.02 and left the linearity
+p-value unchanged.
+
+Inflation is `400 × log(Pq / Pq−1)` for quarterly annualized rates and
 `100 × log(Pq / Pq−4)` for year-over-year rates. The unemployment gap is
 UNRATE minus NROU; tightness is JTSJOL divided by UNEMPLOY. Relative energy
 inflation subtracts **core CPI** inflation from energy CPI inflation. Adaptive
@@ -141,10 +181,33 @@ The regression pipeline uses OLS with Newey–West standard errors (four lags),
 vacancy/unemployment ratios from 0.40 to 1.40. Thresholds in the holdout
 comparison are selected from training observations only.
 
-Inference is exploratory. The moving-block bootstrap uses eight-quarter
-blocks, seed 42, and a coarser threshold grid than the observed statistic.
+The estimated equations, with π for quarterly annualized inflation:
+
+- Accelerationist, 1960–2026: headline π minus its mean over the previous
+  four quarters = α + κ·(u − u\*), optionally plus γ·relative energy
+  inflation. The slope-break test and the rolling windows use this form.
+- Survey expectations, 1978–2026: core π minus Michigan 1-year expectations
+  = α + κ·(u − u\*) + γ·relative energy inflation.
+- Linear tightness, 2001Q1–2026Q1: core π minus Cleveland Fed 1-year
+  expectations = α + β·(v/u) + δ·GSCPI.
+- Kinked tightness, same sample: the same left side = α + β₋·min(v/u − c, 0) +
+  β₊·max(v/u − c, 0) + δ·GSCPI, with c chosen by grid search. The slope
+  ratio in the results is β₊/β₋.
+
+A robustness grid re-estimates the kinked model for three inflation
+measures, three expectations proxies and two supply controls.
+
+Inference is exploratory. Both bootstraps resample eight-quarter blocks. The
+linearity bootstrap (499 replications) uses seed 42 and a coarser threshold
+grid than the observed statistic.
 The stored `c_ci95` bounds are an approximate LR search set: the borrowed
 threshold cutoff has not been calibrated for this continuous-kink model.
+Because the kinked model nests the linear one, no grid point can exceed the
+linearity statistic (sup-LR 4.97), which is below the 7.35 cutoff, so the set
+necessarily covers the whole grid. The slope-break p-value comes from a
+fixed-regressor moving-block bootstrap of the no-break model (1,999
+replications over every trimmed break date, with its own seed) because the
+asymptotic critical values over-reject here.
 Reported slope standard errors condition on the selected threshold. The
 results do not establish a nonlinear Phillips curve or causal effects.
 
@@ -152,11 +215,18 @@ results do not establish a nonlinear Phillips curve or causal effects.
 
 - `code/`: data acquisition, transformations, estimation, figures, tables,
   and the synthetic demo (`run_demo.py`).
-- `results/`: aggregate estimates and supporting CSV outputs; unavailable
-  statistics are represented by JSON `null`.
+- `results/`: `results.json` holds every estimate and test, keyed by
+  section (`descriptives`, `panelA_accelerationist`, `panelA_supply`,
+  `panelC_survey`, `rolling_slope`, `quandt_andrews`, `modern_linear`,
+  `modern_ugap`, `modern_kink`, `kink_test`, `decomposition_summary`,
+  `oos_pre2020`, `oos_pre2023`, `robustness`); unavailable statistics are
+  JSON `null`. `rolling_slope.csv` repeats the rolling slopes,
+  `kink_grid_ssr.csv` gives the residual sum of squares at each threshold,
+  and `decomposition.csv` gives the quarterly contributions behind Figure 6.
 - `figures/`: seven research figures.
 - `tests/`: offline checks using synthetic inputs and saved outputs.
 
-Raw inputs and processed datasets are not bundled; the demo generates
-synthetic stand-ins locally. Generated Markdown tables are saved to the
-ignored `tables/` folder.
+Raw inputs and the processed dataset are not bundled; the demo generates
+synthetic stand-ins locally. `decomposition.csv` includes 26 quarters of the
+processed v/u, GSCPI and Cleveland Fed expectations series. Generated
+Markdown tables are saved to the ignored `tables/` folder.

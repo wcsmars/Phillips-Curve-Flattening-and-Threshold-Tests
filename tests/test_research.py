@@ -1,13 +1,16 @@
 """Offline checks using synthetic inputs and the included research outputs.
 
-Run from the public repository root: python -m unittest discover -s tests -v
-No source-data download or full bootstrap estimation is needed.
+Run from the repository root: python -m unittest discover -s tests -v
+No source-data download is needed. One test runs the full synthetic demo,
+including both bootstraps, so it is the slowest check.
 """
 
 import csv
 import importlib.util
 import json
 import math
+import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +23,14 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def markdown_cells(table):
+    """Header cells and body rows of the pipe tables in a text (panels share a header)."""
+    cells = [[cell.strip() for cell in line.strip().strip("|").split("|")]
+             for line in table.splitlines()
+             if line.startswith("|") and not set(line) <= set("|:- ")]
+    return cells[0], [row for row in cells[1:] if row != cells[0]]
 
 
 class DatasetBuildTests(unittest.TestCase):
@@ -46,8 +57,11 @@ class DatasetBuildTests(unittest.TestCase):
             # levels does not satisfy the expected values below.
             growth = {"CPIAUCSL": 1.01, "CPILFESL": 1.02,
                       "PCEPI": 1.015, "PCEPILFE": 1.025, "CPIENGSL": 1.03}
+            # October 2025 is missing from CPIAUCSL, as in the real June 2026 vintage.
+            gap = months.get_loc(pd.Timestamp("2025-10-01"))
             for name, factor in growth.items():
-                write_series(name, [100 * factor ** (i // 3) + (-1, 0, 1)[i % 3]
+                write_series(name, [np.nan if name == "CPIAUCSL" and i == gap else
+                                    100 * factor ** (i // 3) + (-1, 0, 1)[i % 3]
                                     for i in range(len(months))])
             monthly_patterns = {
                 "UNRATE": (4, 5, 6),
@@ -70,12 +84,14 @@ class DatasetBuildTests(unittest.TestCase):
             elsewhere.mkdir()
             completed = subprocess.run(
                 [sys.executable, str(script)], cwd=elsewhere,
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
             )
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             output = checkout / "data" / "processed" / "quarterly.csv"
             self.assertTrue(output.is_file())
             self.assertFalse((elsewhere / "data").exists())
+            self.assertIn("fewer than 3 months: CPIAUCSL 2025Q4 (2 of 3 months)\n",
+                          completed.stdout)
             data = pd.read_csv(output, index_col="quarter", parse_dates=True)
             observed = data.loc["2019-07-01"]
             self.assertAlmostEqual(observed["pi_qa_cpi"], 400 * math.log(1.01))
@@ -112,9 +128,14 @@ class TableGenerationTests(unittest.TestCase):
             shutil.copyfile(ROOT / "results" / "results.json", results / "results.json")
             elsewhere = base / "unrelated working directory"
             elsewhere.mkdir()
+            # Tables contain characters such as ĉ, κ and −, so file I/O that relies
+            # on the platform default encoding fails on Windows (cp1252).
+            # PYTHONIOENCODING keeps pandas from probing the locale under an ASCII console.
             completed = subprocess.run(
-                [sys.executable, str(script)], cwd=elsewhere,
-                capture_output=True, text=True, timeout=60,
+                [sys.executable, "-X", "warn_default_encoding",
+                 "-W", "error::EncodingWarning", str(script)], cwd=elsewhere,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             tables = checkout / "tables"
@@ -123,12 +144,11 @@ class TableGenerationTests(unittest.TestCase):
                 "table4_robustness.md", "table5_decomposition.md",
             })
             self.assertFalse((elsewhere / "tables").exists())
-            table = (tables / "table1_descriptives.md").read_text()
+            table = (tables / "table1_descriptives.md").read_text(encoding="utf-8")
             self.assertNotRegex(table, r"\b(?:None|NaN|nan|null)\b")
-            cells = [[cell.strip() for cell in line.strip().strip("|").split("|")]
-                     for line in table.splitlines() if line.startswith("|")]
-            header, rows = cells[0], {row[0]: row for row in cells[2:]}
-            saved = json.loads((results / "results.json").read_text())
+            header, body = markdown_cells(table)
+            rows = {row[0]: row for row in body}
+            saved = json.loads((results / "results.json").read_text(encoding="utf-8"))
             missing_cells = 0
             for key, label in {
                 "vu": "Vacancy/unemployment ratio",
@@ -140,12 +160,32 @@ class TableGenerationTests(unittest.TestCase):
                         missing_cells += 1
             self.assertGreater(missing_cells, 0, "Fixture must exercise unavailable statistics")
 
+            # Formatted cells are written verbatim: signs and trailing zeros survive.
+            formats = {
+                "table2_linear_pc.md": {"R²": r"\d\.\d{3}"},
+                "table4_robustness.md": {"ĉ": r"\d\.\d{2}", "Slope below": r"-?\d+\.\d{2}",
+                                         "R²": r"\d\.\d{2}"},
+                "table5_decomposition.md": {None: r"[+-]\d+\.\d{2}"},
+            }
+            for name, columns in formats.items():
+                header, body = markdown_cells((tables / name).read_text(encoding="utf-8"))
+                for column, pattern in columns.items():
+                    positions = [header.index(column)] if column else range(1, len(header))
+                    for row in body:
+                        for position in positions:
+                            with self.subTest(table=name, row=row[0], column=header[position]):
+                                self.assertRegex(row[position], rf"^{pattern}$")
+            notes = (tables / "table2_linear_pc.md").read_text(encoding="utf-8")
+            brk = pd.Timestamp(saved["quandt_andrews"]["break_date"])
+            self.assertIn(f"estimated break {brk.year}Q{brk.quarter};", notes)
+
 
 class SyntheticDemoTests(unittest.TestCase):
-    def run_demo(self, script, workspace):
+    def run_demo(self, script, workspace, *options):
+        options = options or ("--prepare-only",)
         return subprocess.run(
-            [sys.executable, str(script), "--prepare-only", "--workspace", str(workspace)],
-            capture_output=True, text=True, timeout=120,
+            [sys.executable, str(script), *options, "--workspace", str(workspace)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
         )
 
     def test_prepared_inputs_use_source_formats_and_build_offline(self):
@@ -163,9 +203,12 @@ class SyntheticDemoTests(unittest.TestCase):
                                        series)
             built = subprocess.run(
                 [sys.executable, str(workspace / "code" / "01_build_dataset.py")],
-                cwd=temporary, capture_output=True, text=True, timeout=120,
+                cwd=temporary, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120,
             )
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            # JOLTS starts in December 2000, so 2000Q4 v/u uses one month of vacancies.
+            self.assertIn("JTSJOL 2000Q4 (1 of 3 months)", built.stdout)
             data = pd.read_csv(workspace / "data" / "processed" / "quarterly.csv",
                                index_col="quarter", parse_dates=True)
             self.assertEqual(data.index[-1], pd.Timestamp("2026-01-01"))
@@ -176,6 +219,66 @@ class SyntheticDemoTests(unittest.TestCase):
             self.assertGreaterEqual(int((modern["vu"] > 1).sum()), 10)
             self.assertGreaterEqual(int((modern["vu"] < 1).sum()), 10)
 
+    def test_full_demo_recovers_planted_kink(self):
+        """Runs estimation, figures and tables on synthetic data with a known kink."""
+        with tempfile.TemporaryDirectory(prefix="research demo run ") as temporary:
+            workspace = Path(temporary) / "demo workspace"
+            completed = self.run_demo(ROOT / "code" / "run_demo.py", workspace, "--check")
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            saved = json.loads((workspace / "results" / "results.json").read_text(encoding="utf-8"))
+            low, high = saved["kink_test"]["c_ci95"]
+            self.assertLessEqual(abs(saved["modern_kink"]["c_hat"] - 1.0), 0.25)
+            self.assertTrue(low <= 1.0 <= high)
+            self.assertLess(saved["kink_test"]["p_bootstrap"], 0.05)
+            self.assertIn("Recovery check passed", completed.stdout)
+            # Default-seed pin for the slope-break bootstrap: 0.135 when the pseudo-data
+            # are built on the no-break fit, far higher if they are built on the data.
+            qa = saved["quandt_andrews"]
+            self.assertAlmostEqual(qa["p_bootstrap"], 0.135, delta=0.05)
+            self.assertEqual(qa["B"], 1999)
+            self.assertEqual(len(list((workspace / "figures").glob("*.png"))), 7)
+            self.assertEqual(len(list((workspace / "tables").glob("*.md"))), 5)
+
+    def test_new_inputs_clear_earlier_outputs(self):
+        with tempfile.TemporaryDirectory(prefix="research demo reuse ") as temporary:
+            workspace = Path(temporary) / "demo workspace"
+            script = ROOT / "code" / "run_demo.py"
+            self.assertEqual(self.run_demo(script, workspace).returncode, 0)
+            stale = workspace / "results" / "results.json"
+            stale.parent.mkdir()
+            stale.write_text("{}", encoding="utf-8")
+            completed = self.run_demo(script, workspace, "--prepare-only", "--seed", "7")
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertFalse(stale.exists())
+            self.assertIn("seed 7", (workspace / "SYNTHETIC_DEMO.txt").read_text(encoding="utf-8"))
+
+    def test_check_requires_full_run(self):
+        with tempfile.TemporaryDirectory(prefix="research demo flags ") as temporary:
+            workspace = Path(temporary) / "demo workspace"
+            completed = self.run_demo(ROOT / "code" / "run_demo.py", workspace,
+                                      "--check", "--prepare-only")
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("--check needs the full run", completed.stderr)
+            self.assertFalse(workspace.exists())
+
+    def test_refuses_symlinks_out_of_the_workspace(self):
+        with tempfile.TemporaryDirectory(prefix="research demo link ") as temporary:
+            base = Path(temporary)
+            workspace, outside = base / "demo workspace", base / "outside"
+            (outside / "processed").mkdir(parents=True)
+            (outside / "processed" / "keep.csv").write_text("keep", encoding="utf-8")
+            workspace.mkdir()
+            (workspace / "SYNTHETIC_DEMO.txt").write_text("marker", encoding="utf-8")
+            try:
+                (workspace / "data").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symbolic links are not available")
+            completed = self.run_demo(ROOT / "code" / "run_demo.py", workspace)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("points outside the demo workspace", completed.stderr)
+            self.assertTrue((outside / "processed" / "keep.csv").exists())
+            self.assertFalse((outside / "raw").exists())
+
     def test_refuses_checkout_and_foreign_folders(self):
         with tempfile.TemporaryDirectory(prefix="research demo guard ") as temporary:
             checkout = Path(temporary) / "checkout copy"
@@ -184,7 +287,7 @@ class SyntheticDemoTests(unittest.TestCase):
             shutil.copyfile(ROOT / "code" / "run_demo.py", script)
             foreign = Path(temporary) / "existing folder"
             foreign.mkdir()
-            (foreign / "notes.txt").write_text("keep")
+            (foreign / "notes.txt").write_text("keep", encoding="utf-8")
             for target in (checkout, foreign):
                 with self.subTest(target=target.name):
                     completed = self.run_demo(script, target)
@@ -197,7 +300,7 @@ class SyntheticDemoTests(unittest.TestCase):
 class SavedOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with (ROOT / "results" / "results.json").open() as source:
+        with (ROOT / "results" / "results.json").open(encoding="utf-8") as source:
             cls.results = json.load(source)
         cls.decomposition = pd.read_csv(
             ROOT / "results" / "decomposition.csv",
@@ -258,7 +361,7 @@ class SavedOutputTests(unittest.TestCase):
                                        result["rmse_ratio"], delta=0.002)
 
     def test_selected_threshold_minimizes_saved_grid(self):
-        with (ROOT / "results" / "kink_grid_ssr.csv").open() as source:
+        with (ROOT / "results" / "kink_grid_ssr.csv").open(encoding="utf-8", newline="") as source:
             rows = list(csv.reader(source))[1:]
         grid = {float(threshold): float(ssr) for threshold, ssr in rows}
         self.assertTrue(grid)
@@ -268,6 +371,58 @@ class SavedOutputTests(unittest.TestCase):
         self.assertAlmostEqual(grid[selected], min(grid.values()), places=8)
         self.assertGreaterEqual(self.results["kink_test"]["p_bootstrap"], 0)
         self.assertLessEqual(self.results["kink_test"]["p_bootstrap"], 1)
+
+    def test_readme_results_table_matches_saved_results(self):
+        """The README quotes saved estimates; regenerated results must be re-quoted."""
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        if "\n## Results" not in readme:
+            self.skipTest("this README has no Results table")
+        section = readme.split("\n## Results", 1)[1].split("\n## ", 1)[0]
+        _, body = markdown_cells(section)
+        prose = " ".join(section.split())
+        r = self.results
+        slopes = {x["name"]: x["params"]["ugap"] for x in r["panelA_accelerationist"]}
+        qa, lin, kink, test = r["quandt_andrews"], r["modern_linear"], r["modern_kink"], r["kink_test"]
+        brk = pd.Timestamp(qa["break_date"])
+        expected = {  # row label prefix -> numbers quoted in that row, in order
+            "Unemployment-gap slope": [slopes["1960Q1-1989Q4"], slopes["1990Q1-2019Q4"]],
+            "Quandt–Andrews slope-break date": [brk.year, brk.quarter, qa["sup_wald"], qa["crit_1pct"],
+                                                qa["p_bootstrap"]],
+            "Linear vacancy/unemployment slope": [lin["params"]["vu"], lin["tvalues"]["vu"]],
+            "Estimated vacancy/unemployment kink": [kink["c_hat"], *test["c_ci95"]],
+            "Slope above / slope below": [kink["slope_ratio"]],
+            "Bootstrap test of linearity": [test["p_bootstrap"]],
+            "Holdout RMSE, trained through 2022Q4": [r["oos_pre2023"]["rmse_linear"],
+                                                     r["oos_pre2023"]["rmse_kink"]],
+            "Holdout RMSE, trained through 2019Q4": [r["oos_pre2020"]["rmse_linear"],
+                                                     r["oos_pre2020"]["rmse_kink"],
+                                                     r["oos_pre2020"]["c_trained"]],
+        }
+        for prefix, values in expected.items():
+            with self.subTest(row=prefix):
+                rows = [text for label, text in body if label.startswith(prefix)]
+                self.assertEqual(len(rows), 1, "README results row missing or duplicated")
+                # Numbers other than percentages, e.g. "−0.5554", "1983Q2", "0.40–1.40".
+                quoted = re.findall(r"[−-]?\d+(?:\.\d+)?(?!\d|\.\d|%)", rows[0])
+                self.assertEqual(len(quoted), len(values), quoted)
+                for text, value in zip(quoted, values):
+                    # Each quote must be the saved value rounded to the quoted precision.
+                    decimals = len(text.partition(".")[2])
+                    self.assertEqual(text.replace("−", "-"), f"{value:.{decimals}f}")
+        # Numbers quoted in the prose around the table.
+        pre2023, pre2020 = r["oos_pre2023"], r["oos_pre2020"]
+        path = pd.DataFrame(pre2020["path"]).set_index("quarter").loc["2021-04-01":"2022-10-01"]
+        shortfall = path["actual_infl"].to_numpy()[:, None] - path[["pred_linear", "pred_kink"]].to_numpy()
+        share = r["decomposition_summary"]["disinflation_peak_to_2025"]
+        for phrase in (
+            f"use {lin['nobs']} quarters from 2001Q1 to 2026Q1",
+            f"over the {len(pre2023['path'])} quarters from 2023Q1 to 2026Q1",
+            f"roughly {round(100 * (1 - pre2023['rmse_ratio']))}% lower",
+            f"inflation by roughly {shortfall.min():.1f} to {shortfall.max():.0f} percentage points",
+            f"roughly {round(100 * share['contrib_tightness'] / share['actual_pi'])}% of the inflation decline",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, prose)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-res = json.load(open(ROOT / "results/results.json"))
+res = json.loads((ROOT / "results" / "results.json").read_text(encoding="utf-8"))
 TAB = ROOT / "tables"
 TAB.mkdir(parents=True, exist_ok=True)
 
@@ -15,6 +15,28 @@ def stars(p):
 
 def cell(b, se, p):
     return f"{b:.3f}{stars(p)} ({se:.3f})"
+
+
+def is_number(value):
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def markdown(frame):
+    """Write formatted cells verbatim; tabulate would turn "+3.50" into "3.5".
+
+    Columns made only of numbers stay right-aligned, as before.
+    """
+    align = ["right" if all(is_number(v) for v in frame[c]) else "left" for c in frame.columns]
+    return frame.to_markdown(index=False, disable_numparse=True, colalign=align)
+
+
+def quarter(iso_date):
+    stamp = pd.Timestamp(iso_date)
+    return f"{stamp.year}Q{stamp.quarter}"
 
 
 # Table 1: descriptives -------------------------------------------------------
@@ -37,9 +59,9 @@ for v, lab in labels.items():
     rows.append(row)
 t1 = pd.DataFrame(rows)
 t1_md = ("**Table 1. Descriptive statistics by period — mean (standard deviation), quarterly data**\n\n"
-         + t1.to_markdown(index=False)
+         + markdown(t1)
          + "\n\n*Notes:* v/u available from 2000Q4 (JOLTS); Michigan from 1978; Cleveland Fed from 1982; GSCPI from 1998. 2020–2026Q1 column ends with the last complete quarter (2026Q1).")
-(TAB / "table1_descriptives.md").write_text(t1_md)
+(TAB / "table1_descriptives.md").write_text(t1_md + "\n", encoding="utf-8", newline="\n")
 
 # Table 2: linear Phillips curves --------------------------------------------
 rows = []
@@ -63,13 +85,15 @@ t2c = pd.DataFrame(rows)
 qa = res["quandt_andrews"]
 t2_md = ("**Table 2. Linear Phillips-curve estimates across eras**\n\n"
          "*Panel A — accelerationist specification: π(headline CPI, q/q ann.) − mean of past 4 quarters = α + κ·(u − u\\*) [+ γ·relative energy inflation]*\n\n"
-         + t2a.to_markdown(index=False) + "\n\n"
+         + markdown(t2a) + "\n\n"
          "*Panel B — survey-expectations specification: π(core CPI, q/q ann.) − Michigan 1y expectation = α + κ·(u − u\\*) + γ·relative energy inflation*\n\n"
-         + t2c.to_markdown(index=False) + "\n\n"
+         + markdown(t2c) + "\n\n"
          f"*Notes:* Newey–West (HAC) standard errors with 4 lags in parentheses; \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.10. "
-         f"Quandt–Andrews sup-Wald test for an unknown break in κ (1960–2019, 15% trimming): sup-W = {qa['sup_wald']}, "
-         f"estimated break {qa['break_date']}; 1% critical value {qa['crit_1pct']} (Andrews 1993, 2003).")
-(TAB / "table2_linear_pc.md").write_text(t2_md)
+         f"Quandt–Andrews sup-Wald test for an unknown break in κ (1960–2019, 15% trimming): sup-W = {qa['sup_wald']:.2f}, "
+         f"estimated break {quarter(qa['break_date'])}; asymptotic 1% critical value {qa['crit_1pct']:.2f} (Andrews 1993, 2003). "
+         f"Because the HAC sup-Wald over-rejects in samples of this size, a fixed-regressor moving-block bootstrap of the "
+         f"no-break model gives the finite-sample p-value: p = {qa['p_bootstrap']:.3f} (B = {qa['B']}, block length {qa['block_length']}).")
+(TAB / "table2_linear_pc.md").write_text(t2_md + "\n", encoding="utf-8", newline="\n")
 
 # Table 3: linear vs kinked v/u curve -----------------------------------------
 lin, kink, kt = res["modern_linear"], res["modern_kink"], res["kink_test"]
@@ -89,13 +113,14 @@ t3 = pd.DataFrame([
 ])
 t3_md = ("**Table 3. Linear vs. kinked Phillips curve in labor-market tightness, 2001Q1–2026Q1**\n\n"
          "*Dependent variable: core CPI inflation (q/q annualized) − Cleveland Fed 1-year expected inflation*\n\n"
-         + t3.to_markdown(index=False) + "\n\n"
+         + markdown(t3) + "\n\n"
          f"*Notes:* Newey–West (4 lags) standard errors in parentheses; \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.10. "
          f"Kink located by grid search over v/u ∈ [0.40, 1.40]; approximate LR search set uses the Hansen (2000) cutoff, "
          f"whose coverage is not established here for a continuous kink. Slope standard errors condition on the selected threshold. "
-         f"sup-LR test of linearity = {kt['supLR']}, moving-block bootstrap p-value = {kt['p_bootstrap']:.2f} "
+         f"AIC treats ĉ as fixed and does not penalize the threshold search. "
+         f"sup-LR test of linearity = {kt['supLR']:.2f}, moving-block bootstrap p-value = {kt['p_bootstrap']:.2f} "
          f"(B = {kt['B']}, block length {kt['block_length']}).")
-(TAB / "table3_kink.md").write_text(t3_md)
+(TAB / "table3_kink.md").write_text(t3_md + "\n", encoding="utf-8", newline="\n")
 
 # Table 4: robustness grid ------------------------------------------------------
 def kink_pattern(label, specs):
@@ -120,13 +145,13 @@ rows = [{"Inflation": infl_lab[x["inflation"]], "Expectations": exp_lab[x["expec
          "Slope above": f"{x['slope_above']:.2f} ({x['se_above']:.2f})",
          "R²": f"{x['r2']:.2f}"} for x in res["robustness"]]
 t4_md = ("**Table 4. Robustness of the kinked specification, 2001Q1–2026Q1**\n\n"
-         + pd.DataFrame(rows).to_markdown(index=False) + "\n\n"
+         + markdown(pd.DataFrame(rows)) + "\n\n"
          "*Notes:* Each row re-estimates the kinked model with the stated inflation measure (q/q annualized, minus the stated "
          "expectation measure) and supply control; ĉ re-estimated by grid search per specification. Newey–West (4 lags) "
          "standard errors in parentheses; the search grid is v/u ∈ [0.40, 1.40]. "
          + kink_pattern("Cleveland Fed", [x for x in res["robustness"] if x["expectations"] != "mich"]) + " "
          + kink_pattern("Michigan household", [x for x in res["robustness"] if x["expectations"] == "mich"]))
-(TAB / "table4_robustness.md").write_text(t4_md)
+(TAB / "table4_robustness.md").write_text(t4_md + "\n", encoding="utf-8", newline="\n")
 
 # Table 5: decomposition summary -------------------------------------------------
 d = res["decomposition_summary"]
@@ -140,9 +165,9 @@ rows = [{"Component": v,
          "Disinflation: 2025Q1–2026Q1 vs. 2022Q2–2022Q4 (pp)": f"{d['disinflation_peak_to_2025'][k]:+.2f}"}
         for k, v in lab.items()]
 t5_md = ("**Table 5. Accounting for the surge and the disinflation (kinked model, Table 3 column 2)**\n\n"
-         + pd.DataFrame(rows).to_markdown(index=False) + "\n\n"
+         + markdown(pd.DataFrame(rows)) + "\n\n"
          "*Notes:* Entries are changes in period-average fitted contributions between the stated windows; components sum to the "
          "actual change up to rounding. The constant nets out of changes.")
-(TAB / "table5_decomposition.md").write_text(t5_md)
+(TAB / "table5_decomposition.md").write_text(t5_md + "\n", encoding="utf-8", newline="\n")
 
 print("tables written:", sorted(p.name for p in TAB.glob("*.md")))

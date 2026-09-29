@@ -17,7 +17,7 @@ from pathlib import Path
 import tempfile
 import time
 from datetime import date, datetime, timezone
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -92,7 +92,9 @@ def parse_gscpi_workbook(payload):
     )
     output = pd.DataFrame({"date": dates[valid], "gscpi": values[valid]})
     output = output.sort_values("date")
-    payload = output.to_csv(index=False, date_format="%Y-%m-%d").encode("utf-8")
+    # LF on every platform, so the file and its recorded checksum do not depend on the OS.
+    payload = output.to_csv(index=False, date_format="%Y-%m-%d",
+                            lineterminator="\n").encode("utf-8")
     validate_csv(payload, "GSCPI")
     return payload
 
@@ -107,8 +109,11 @@ def download(url, timeout=30, attempts=3):
             if len(payload) > MAX_DOWNLOAD_BYTES:
                 raise ValueError("Source response exceeds the 20 MiB download limit")
             return payload
-        except (URLError, TimeoutError, OSError):
-            if attempt + 1 == attempts:
+        except (URLError, TimeoutError, OSError) as error:
+            # A client error such as 404 will not change on retry; 408 and 429 may.
+            permanent = (isinstance(error, HTTPError) and 400 <= error.code < 500
+                         and error.code not in {408, 429})
+            if permanent or attempt + 1 == attempts:
                 raise
             time.sleep(2 ** attempt)
     raise ValueError("attempts must be positive")
@@ -121,37 +126,70 @@ def atomic_write(path, payload):
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
             temporary = Path(handle.name)
             handle.write(payload)
+        # Temporary files are owner-only; keep the permissions a normal write would give.
+        if path.exists():
+            mode = path.stat().st_mode & 0o777
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 
-def acquire(series, raw_dir, force=False, timeout=30, attempts=3):
+def existing_coverage(destination, series):
+    """Validated span of the current input file, or None if it is absent or invalid."""
+    if not destination.exists():
+        return None
+    try:
+        return validate_csv(destination.read_bytes(), series)
+    except (ValueError, UnicodeError, csv.Error):
+        return None
+
+
+def prepare(series, raw_dir, force=False, timeout=30, attempts=3):
+    """Download and validate one input without writing anything."""
     raw_dir = Path(raw_dir)
-    raw_dir.mkdir(parents=True, exist_ok=True)
     destination = raw_dir / f"{series}.csv"
-    provenance = raw_dir / f"{series}.provenance.json"
-    retrieved_at = None
-    source_sha256 = None
-    payload = None
-    if destination.exists() and not force:
-        try:
-            payload = destination.read_bytes()
-            validate_csv(payload, series)
-        except (ValueError, UnicodeError, csv.Error):
-            payload = None
-    if payload is None:
-        source = download(source_url(series), timeout=timeout, attempts=attempts)
-        payload = parse_gscpi_workbook(source) if series == "GSCPI" else source
-        metadata = validate_csv(payload, series)
-        retrieved_at = datetime.now(timezone.utc).isoformat()
-        source_sha256 = hashlib.sha256(source).hexdigest()
+    current = existing_coverage(destination, series)
+    plan = {"series": series, "destination": destination,
+            "provenance": raw_dir / f"{series}.provenance.json",
+            "retrieved_at": None, "source_sha256": None}
+    if current is not None and not force:
+        plan.update(payload=destination.read_bytes(), metadata=current, action="reused")
+        return plan
+    source = download(source_url(series), timeout=timeout, attempts=attempts)
+    payload = parse_gscpi_workbook(source) if series == "GSCPI" else source
+    metadata = validate_csv(payload, series)
+    # A refresh may revise values but must not silently shorten or thin the history.
+    # Months are compared, so a switch between month-start and month-end dates passes.
+    if current is not None and (metadata["first_date"][:7] > current["first_date"][:7]
+                                or metadata["last_date"][:7] < current["last_date"][:7]
+                                or metadata["numeric_observations"]
+                                < current["numeric_observations"]):
+        raise ValueError(
+            f"{series}: new download covers {metadata['first_date']} to "
+            f"{metadata['last_date']} with {metadata['numeric_observations']} values, "
+            f"less than the existing {current['first_date']} to {current['last_date']} "
+            f"with {current['numeric_observations']}; delete {destination.name} "
+            "to accept the shorter series")
+    plan.update(payload=payload, metadata=metadata, action="downloaded",
+                retrieved_at=datetime.now(timezone.utc).isoformat(),
+                source_sha256=hashlib.sha256(source).hexdigest())
+    return plan
+
+
+def commit(plan):
+    """Write a prepared input and its provenance record."""
+    series, payload, metadata = plan["series"], plan["payload"], plan["metadata"]
+    destination, provenance, action = plan["destination"], plan["provenance"], plan["action"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if action == "downloaded":
         atomic_write(destination, payload)
-        action = "downloaded"
-    else:
-        metadata = validate_csv(payload, series)
-        action = "reused"
+    retrieved_at, source_sha256 = plan["retrieved_at"], plan["source_sha256"]
     digest = hashlib.sha256(payload).hexdigest()
     # Preserve the actual retrieval time on reuse; never invent an old vintage.
     if action == "reused" and provenance.exists():
@@ -176,6 +214,10 @@ def acquire(series, raw_dir, force=False, timeout=30, attempts=3):
     print(f"{series}: {action} {metadata['rows']} rows")
 
 
+def acquire(series, raw_dir, force=False, timeout=30, attempts=3):
+    commit(prepare(series, raw_dir, force, timeout, attempts))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dir", type=Path, default=ROOT / "data" / "raw")
@@ -187,11 +229,22 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and positive")
+    # Validate every requested series before replacing any file, so a failed
+    # download or validation leaves every input unchanged.
+    plans = []
     for series in args.series:
         try:
-            acquire(series, args.raw_dir, args.force, args.timeout, args.attempts)
+            plans.append(prepare(series, args.raw_dir, args.force, args.timeout, args.attempts))
         except Exception as error:
-            parser.exit(1, f"{series}: acquisition failed: {error}\n")
+            parser.exit(1, f"{series}: acquisition failed: {error}; no input files were changed\n")
+    written = []
+    for plan in plans:
+        try:
+            commit(plan)
+        except OSError as error:
+            parser.exit(1, f"{plan['series']}: writing the input failed: {error}; "
+                           f"already written: {', '.join(written) or 'none'}\n")
+        written.append(plan["series"])
 
 
 if __name__ == "__main__":

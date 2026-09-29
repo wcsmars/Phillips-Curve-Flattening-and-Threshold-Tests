@@ -8,6 +8,7 @@ Sections
   B. Long-sample accelerationist Phillips curve (1960-2026), sub-samples
   C. Survey-expectations Phillips curve (1978-2026)
   D. Rolling 60-quarter slope + Quandt-Andrews sup-Wald break test
+     (asymptotic critical values and a moving-block-bootstrap p-value)
   E. Modern sample (2001-2026): linear vs. kinked Phillips curve in v/u,
      grid-search threshold + moving-block-bootstrap sup-LR inference
   F. Historical decomposition of 2020-2026 inflation
@@ -43,7 +44,7 @@ def reg_record(m, name):
         "name": name,
         "params": {k: round(v, 4) for k, v in m.params.items()},
         "se": {k: round(v, 4) for k, v in m.bse.items()},
-        "tvalues": {k: round(v, 3) for k, v in m.tvalues.items()},
+        "tvalues": {k: round(v, 4) for k, v in m.tvalues.items()},
         "pvalues": {k: round(v, 4) for k, v in m.pvalues.items()},
         "nobs": int(m.nobs), "r2": round(m.rsquared, 4),
         "r2_adj": round(m.rsquared_adj, 4),
@@ -119,7 +120,7 @@ for i in range(window, len(data_d) + 1):
                  "kappa": round(m.params["ugap"], 4),
                  "se": round(m.bse["ugap"], 4)})
 results["rolling_slope"] = roll
-pd.DataFrame(roll).to_csv(RES / "rolling_slope.csv", index=False)
+pd.DataFrame(roll).to_csv(RES / "rolling_slope.csv", index=False, lineterminator="\n")
 
 # =========================================================================
 # D2. Quandt-Andrews sup-Wald test for a break in the slope, 1960-2019
@@ -127,14 +128,19 @@ pd.DataFrame(roll).to_csv(RES / "rolling_slope.csv", index=False)
 qa_data = df.loc["1960-01-01":"2019-10-01", ["pi_gap_accel", "ugap"]].dropna()
 n = len(qa_data)
 trim = int(0.15 * n)
+breaks = range(trim, n - trim + 1)  # j = first post-break quarter
+if not breaks[0] == trim == n - breaks[-1]:
+    raise RuntimeError("each regime must keep at least 15% of the quarters")
 sup_w, sup_date = -np.inf, None
-for j in range(trim, n - trim):
+qa_stats = []
+for j in breaks:
     d = (np.arange(n) >= j).astype(float)
     X = pd.DataFrame({"ugap": qa_data["ugap"].values,
                       "D": d, "D_ugap": d * qa_data["ugap"].values},
                      index=qa_data.index)
     m = ols_nw(qa_data["pi_gap_accel"], X)
     w = float(m.wald_test("D_ugap = 0", scalar=True).statistic)
+    qa_stats.append(w)
     if w > sup_w:
         sup_w, sup_date = w, str(qa_data.index[j].date())
 # Andrews (1993)/(2003) asymptotic critical values, p=1, 15% trimming
@@ -144,6 +150,48 @@ results["quandt_andrews"] = {"sup_wald": round(sup_w, 2),
                              "crit_1pct": 12.35,
                              "note": "sup-Wald on slope-shift dummy, HAC(4); "
                                      "Andrews (1993, 2003) critical values"}
+
+# With a persistent u-gap and HAC variances from short edge regimes, the
+# sup-Wald rejects too often at the asymptotic critical values in samples of
+# this size. A fixed-regressor moving-block bootstrap of the no-break model
+# gives a finite-sample p-value. It uses its own generator, so the section E
+# bootstrap draws are unchanged.
+qa_y, qa_x = qa_data["pi_gap_accel"].values, qa_data["ugap"].values
+qa_null = sm.OLS(qa_y, sm.add_constant(qa_x)).fit()
+qa_designs = []
+for j in breaks:
+    d = (np.arange(n) >= j).astype(float)
+    Xj = np.column_stack([np.ones(n), qa_x, d, d * qa_x])
+    XtXi = np.linalg.inv(Xj.T @ Xj)
+    qa_designs.append((Xj, XtXi @ Xj.T, Xj @ XtXi[-1]))
+
+
+def wald_by_date(Y, lags=NW_LAGS):
+    """HAC Wald statistic for D_ugap = 0 at every break date (rows), one column
+    per column of Y; the same Bartlett estimator as ols_nw (no df correction)."""
+    stats = []
+    for Xj, P, g in qa_designs:
+        coef = P @ Y
+        U = g[:, None] * (Y - Xj @ coef)
+        v = (U * U).sum(0)
+        for lag in range(1, lags + 1):
+            v += 2 * (1 - lag / (lags + 1)) * (U[lag:] * U[:-lag]).sum(0)
+        stats.append(coef[-1] ** 2 / v)
+    return np.array(stats)
+
+
+if not np.allclose(wald_by_date(qa_y[:, None])[:, 0], qa_stats, rtol=1e-8):
+    raise RuntimeError("bootstrap Wald statistic differs from the statsmodels one")
+qa_rng = np.random.default_rng(1983)
+QA_B, QA_BLOCK = 1999, 8
+qa_starts = qa_rng.integers(0, n - QA_BLOCK + 1, (QA_B, int(np.ceil(n / QA_BLOCK))))
+qa_index = (qa_starts[:, :, None] + np.arange(QA_BLOCK)).reshape(QA_B, -1)[:, :n]
+qa_boot = wald_by_date(qa_null.fittedvalues[:, None] + qa_null.resid[qa_index.T]).max(0)
+results["quandt_andrews"].update({
+    "p_bootstrap": round(float(np.mean(qa_boot >= sup_w)), 4),
+    "boot_crit_5pct": round(float(np.quantile(qa_boot, 0.95)), 2),
+    "boot_crit_1pct": round(float(np.quantile(qa_boot, 0.99)), 2),
+    "B": QA_B, "block_length": QA_BLOCK})
 
 # =========================================================================
 # E. Modern sample: linear vs kinked PC in v/u, 2001Q1-2026Q1
@@ -155,6 +203,24 @@ y = mdat["pi_gap"]
 
 m_lin = ols_nw(y, mdat[["vu", "gscpi"]])
 results["modern_linear"] = reg_record(m_lin, "linear 2001-2026")
+
+# Horse race on the same quarters: the unemployment gap in place of v/u.
+# The post-2020 RMSEs are in-sample residuals of these full-sample fits.
+m_ugap = ols_nw(y, pd.concat([mod.loc[mdat.index, "ugap"], mdat["gscpi"]], axis=1))
+if int(m_ugap.nobs) != int(m_lin.nobs):
+    raise ValueError("u-gap horse race must use the v/u quarters; ugap is missing in "
+                     + ", ".join(f"{q.year}Q{q.quarter}" for q in
+                                 mdat.index[mod.loc[mdat.index, "ugap"].isna()]))
+results["modern_ugap"] = reg_record(m_ugap, "linear u-gap 2001-2026")
+
+
+def rmse_post2020(resid):
+    resid = resid[resid.index >= pd.Timestamp("2020-01-01")]
+    return round(float(np.sqrt(np.mean(resid ** 2))), 3)
+
+
+results["modern_ugap"]["rmse_post2020_in_sample"] = {
+    "vu": rmse_post2020(m_lin.resid), "ugap": rmse_post2020(m_ugap.resid)}
 
 
 def kink_fit(ydat, xdat, c):
@@ -178,6 +244,8 @@ results["modern_kink"] = reg_record(m_kink, f"kink at vu={c_hat}")
 results["modern_kink"]["c_hat"] = float(c_hat)
 results["modern_kink"]["slope_ratio"] = round(
     m_kink.params["above"] / m_kink.params["below"], 2)
+results["modern_kink"]["quarters_above_kink"] = [
+    f"{q.year}Q{q.quarter}" for q in mdat.index[mdat["vu"] > c_hat]]
 
 # sup-LR test of linear vs kink, moving-block bootstrap under the null
 X_lin = sm.add_constant(mdat[["vu", "gscpi"]])
@@ -216,12 +284,15 @@ results["kink_test"] = {"supLR": round(float(supLR), 2),
                                           "gscpi": mdat["gscpi"]},
                                          index=mdat.index))).fit().aic, 1)}
 
-# threshold CI: grid points whose LR distance from minimum is < 7.35
-# (Hansen 2000 95% level for threshold location)
+# Approximate LR search set for the threshold (stored as c_ci95): grid points
+# whose LR distance from the minimum is below Hansen's (2000) 7.35 cutoff. That
+# cutoff is derived for discontinuous thresholds, so the set's coverage is not
+# established for this continuous kink.
 lr_c = {c: nobs * np.log(s / ssr_kink) for c, s in ssrs.items()}
 ci_set = [c for c, v in lr_c.items() if v <= 7.35]
 results["kink_test"]["c_ci95"] = [min(ci_set), max(ci_set)]
-pd.Series(ssrs).to_csv(RES / "kink_grid_ssr.csv")
+pd.Series(ssrs, name="ssr").rename_axis("threshold").round(10).to_csv(
+    RES / "kink_grid_ssr.csv", lineterminator="\n")
 
 # =========================================================================
 # F. Historical decomposition 2019Q4-2026Q1 using the kinked model
@@ -240,7 +311,7 @@ dec["actual_pi"] = dec["pi_qa_corecpi"]
 dec["residual"] = dec["actual_pi"] - dec["fitted_pi"]
 keep = ["actual_pi", "fitted_pi", "contrib_expectations", "contrib_tightness",
         "contrib_supply", "contrib_const", "residual", "vu", "gscpi", "cle1y"]
-dec[keep].round(3).to_csv(RES / "decomposition.csv")
+dec[keep].round(3).to_csv(RES / "decomposition.csv", lineterminator="\n")
 
 surge = dec.loc["2021-04-01":"2022-10-01"]      # 2021Q2-2022Q4 surge window
 calm = dec.loc["2019-10-01":"2020-01-01"]       # pre-pandemic baseline
@@ -345,8 +416,9 @@ def json_safe(value):
     return value
 
 
-with open(RES / "results.json", "w") as f:
+with open(RES / "results.json", "w", encoding="utf-8", newline="\n") as f:
     json.dump(json_safe(results), f, indent=1, allow_nan=False)
+    f.write("\n")
 print("written results.json")
 print("\n--- headline numbers ---")
 print("Panel A slopes:", [(r["name"], r["params"]["ugap"], r["pvalues"]["ugap"])

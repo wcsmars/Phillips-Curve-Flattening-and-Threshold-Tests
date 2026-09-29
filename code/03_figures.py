@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIG = ROOT / "figures"; FIG.mkdir(exist_ok=True)
 df = pd.read_csv(ROOT / "data/processed/quarterly.csv",
                  parse_dates=["quarter"]).set_index("quarter")
-res = json.load(open(ROOT / "results/results.json"))
+res = json.loads((ROOT / "results" / "results.json").read_text(encoding="utf-8"))
 rec = pd.read_csv(ROOT / "data/raw/USREC.csv")
 rec.columns = ["date", "usrec"]
 rec["date"] = pd.to_datetime(rec["date"])

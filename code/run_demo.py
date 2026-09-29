@@ -17,6 +17,7 @@ Usage (from any working directory):
     python code/run_demo.py                  # inputs + full pipeline
     python code/run_demo.py --prepare-only   # inputs and scripts only
     python code/run_demo.py --workspace DIR --seed 7
+    python code/run_demo.py --check          # fail unless the planted kink is recovered
 """
 import argparse
 import json
@@ -32,6 +33,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 PIPELINE = ("01_build_dataset.py", "02_analysis.py", "03_figures.py", "04_tables.py")
 MARKER = "SYNTHETIC_DEMO.txt"
+OUTPUTS = ("data/processed", "results", "figures", "tables")  # written by the pipeline
 
 # Planted model for the quarterly inflation gap:
 #   gap = CONSTANT + SLOPE_BELOW * min(v/u - K, 0) + SLOPE_ABOVE * max(v/u - K, 0)
@@ -115,7 +117,7 @@ def write_fred(raw, code, series, digits):
     series = series.loc[MONTHLY_STARTS.get(code, series.index[0]):]
     frame = pd.DataFrame({"observation_date": series.index.strftime("%Y-%m-%d"),
                           code: series.round(digits).to_numpy()})
-    frame.to_csv(raw / f"{code}.csv", index=False)
+    frame.to_csv(raw / f"{code}.csv", index=False, lineterminator="\n")
 
 
 def write_inputs(raw, seed):
@@ -137,7 +139,8 @@ def write_inputs(raw, seed):
     write_fred(raw, "NROU", q["nrou"].loc["1949-01-01":"2026-04-01"], 4)
     gscpi = to_months(q["gscpi"], wiggle=0.1).loc["1998-01-01":]
     pd.DataFrame({"date": (gscpi.index + pd.offsets.MonthEnd(0)).strftime("%Y-%m-%d"),
-                  "gscpi": gscpi.round(4).to_numpy()}).to_csv(raw / "GSCPI.csv", index=False)
+                  "gscpi": gscpi.round(4).to_numpy()}).to_csv(raw / "GSCPI.csv", index=False,
+                                                              lineterminator="\n")
 
 
 def prepare(workspace, seed):
@@ -149,13 +152,23 @@ def prepare(workspace, seed):
             any(workspace.iterdir()) and not (workspace / MARKER).is_file())):
         raise SystemExit(f"run_demo: {workspace} is not an empty folder or an earlier "
                          "demo workspace; choose another --workspace")
+    # A symlink here would send the cleanup and the writes below outside the workspace.
+    for name in (*OUTPUTS, "code", "data", "data/raw", MARKER):
+        target = workspace / name
+        if target.is_symlink() or not target.resolve().is_relative_to(workspace):
+            raise SystemExit(f"run_demo: {target} points outside the demo workspace; "
+                             "remove it or choose another --workspace")
+    # Outputs of an earlier run would otherwise sit next to inputs from a new seed.
+    for name in OUTPUTS:
+        shutil.rmtree(workspace / name, ignore_errors=True)
     code, raw = workspace / "code", workspace / "data" / "raw"
     code.mkdir(parents=True, exist_ok=True)
     raw.mkdir(parents=True, exist_ok=True)
     (workspace / MARKER).write_text(
         "Synthetic demo workspace written by code/run_demo.py. Every input, "
         f"estimate, figure and table here is synthetic (seed {seed}, planted kink "
-        f"at v/u = {PLANTED_KINK}); none of it describes the U.S. economy.\n")
+        f"at v/u = {PLANTED_KINK}); none of it describes the U.S. economy.\n",
+        encoding="utf-8", newline="\n")
     for name in PIPELINE:
         shutil.copyfile(ROOT / "code" / name, code / name)
     write_inputs(raw, seed)
@@ -172,7 +185,7 @@ def run_pipeline(workspace):
 
 
 def summarize(workspace):
-    res = json.loads((workspace / "results" / "results.json").read_text())
+    res = json.loads((workspace / "results" / "results.json").read_text(encoding="utf-8"))
     kink, test = res["modern_kink"], res["kink_test"]
     print(f"\nPlanted kink at v/u = {PLANTED_KINK:.2f}; estimated {kink['c_hat']:.2f}.")
     print(f"Planted slopes below/above: {SLOPE_BELOW} / {SLOPE_ABOVE}; "
@@ -182,6 +195,30 @@ def summarize(workspace):
     print(f"Approximate LR search set {low:.2f}-{high:.2f} {verdict} the planted kink.")
     print(f"sup-LR = {test['supLR']}, moving-block bootstrap p = {test['p_bootstrap']}.")
     print(f"Synthetic outputs are in {workspace}")
+    return res
+
+
+# Recovery checks for --check, which CI runs with the default seed. A wrong
+# threshold search, kink regressor or slope estimate moves the default run far
+# outside these tolerances. Other seeds can miss them by chance, because the
+# threshold is weakly identified in some synthetic samples.
+KINK_TOLERANCE, SLOPE_ABOVE_TOLERANCE = 0.25, 1.5
+
+
+def recovery_problems(res, workspace):
+    """Failed recovery checks for a finished demo run; empty when all pass."""
+    kink, (low, high) = res["modern_kink"], res["kink_test"]["c_ci95"]
+    problems = []
+    if abs(kink["c_hat"] - PLANTED_KINK) > KINK_TOLERANCE:
+        problems.append(f"estimated kink {kink['c_hat']} is far from {PLANTED_KINK}")
+    if not low <= PLANTED_KINK <= high:
+        problems.append(f"LR search set {low}-{high} excludes the planted kink")
+    if abs(kink["params"]["above"] - SLOPE_ABOVE) > SLOPE_ABOVE_TOLERANCE:
+        problems.append(f"upper slope {kink['params']['above']} is far from {SLOPE_ABOVE}")
+    for folder, pattern, count in (("figures", "*.png", 7), ("tables", "*.md", 5)):
+        if len(list((workspace / folder).glob(pattern))) != count:
+            problems.append(f"expected {count} files in {folder}/")
+    return problems
 
 
 def main():
@@ -192,12 +229,20 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--prepare-only", action="store_true",
                         help="write synthetic inputs and scripts without estimating")
+    parser.add_argument("--check", action="store_true",
+                        help="exit with an error unless the planted kink is recovered")
     args = parser.parse_args()
+    if args.check and args.prepare_only:
+        parser.error("--check needs the full run; drop --prepare-only")
     workspace = prepare(args.workspace, args.seed)
     print(f"Synthetic inputs written to {workspace / 'data' / 'raw'}")
     if not args.prepare_only:
         run_pipeline(workspace)
-        summarize(workspace)
+        problems = recovery_problems(summarize(workspace), workspace)
+        if args.check and problems:
+            raise SystemExit("run_demo: planted model not recovered: " + "; ".join(problems))
+        if args.check:
+            print("Recovery check passed: the planted kink was recovered.")
 
 
 if __name__ == "__main__":

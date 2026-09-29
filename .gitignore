@@ -1,5 +1,6 @@
 # Local data, environments, generated tables, and the synthetic demo workspace
 /data/
+**/data/raw/
 /tables/
 /demo/
 .venv/
@@ -28,10 +29,13 @@ credentials/
 private/
 *.key
 *.pem
+secrets.*
 
 # Local documents and build scripts
 /paper/
 /docs/
+paper_full.*
+BRIEF.md
 /code/05_assemble.py
 /code/06_fix_docx_xml.py
 *.docx

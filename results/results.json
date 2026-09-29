@@ -209,7 +209,7 @@
    },
    "tvalues": {
     "const": 0.687,
-    "ugap": -3.762
+    "ugap": -3.7623
    },
    "pvalues": {
     "const": 0.4921,
@@ -230,8 +230,8 @@
     "ugap": 0.1291
    },
    "tvalues": {
-    "const": -0.275,
-    "ugap": -0.009
+    "const": -0.2748,
+    "ugap": -0.0087
    },
    "pvalues": {
     "const": 0.7835,
@@ -252,8 +252,8 @@
     "ugap": 0.3296
    },
    "tvalues": {
-    "const": 0.127,
-    "ugap": -0.206
+    "const": 0.1266,
+    "ugap": -0.2064
    },
    "pvalues": {
     "const": 0.8992,
@@ -274,8 +274,8 @@
     "ugap": 0.114
    },
    "tvalues": {
-    "const": 0.841,
-    "ugap": -2.069
+    "const": 0.8407,
+    "ugap": -2.0695
    },
    "pvalues": {
     "const": 0.4005,
@@ -300,9 +300,9 @@
     "rel_energy": 0.0088
    },
    "tvalues": {
-    "const": 0.787,
-    "ugap": -3.529,
-    "rel_energy": 8.223
+    "const": 0.7871,
+    "ugap": -3.5292,
+    "rel_energy": 8.2227
    },
    "pvalues": {
     "const": 0.4312,
@@ -326,9 +326,9 @@
     "rel_energy": 0.0109
    },
    "tvalues": {
-    "const": -0.763,
-    "ugap": 0.439,
-    "rel_energy": 8.946
+    "const": -0.7633,
+    "ugap": 0.4392,
+    "rel_energy": 8.9463
    },
    "pvalues": {
     "const": 0.4453,
@@ -352,8 +352,8 @@
     "rel_energy": 0.0075
    },
    "tvalues": {
-    "const": -0.542,
-    "ugap": 2.117,
+    "const": -0.5421,
+    "ugap": 2.1172,
     "rel_energy": 15.737
    },
    "pvalues": {
@@ -378,9 +378,9 @@
     "rel_energy": 0.0081
    },
    "tvalues": {
-    "const": 0.491,
-    "ugap": -1.801,
-    "rel_energy": 11.741
+    "const": 0.4906,
+    "ugap": -1.8015,
+    "rel_energy": 11.7405
    },
    "pvalues": {
     "const": 0.6237,
@@ -406,9 +406,9 @@
     "rel_energy": 0.0145
    },
    "tvalues": {
-    "const": 5.042,
-    "ugap": -0.632,
-    "rel_energy": -0.756
+    "const": 5.0415,
+    "ugap": -0.6316,
+    "rel_energy": -0.7557
    },
    "pvalues": {
     "const": 0.0,
@@ -432,9 +432,9 @@
     "rel_energy": 0.0055
    },
    "tvalues": {
-    "const": -3.574,
-    "ugap": -3.678,
-    "rel_energy": -1.584
+    "const": -3.5744,
+    "ugap": -3.6783,
+    "rel_energy": -1.5844
    },
    "pvalues": {
     "const": 0.0004,
@@ -458,9 +458,9 @@
     "rel_energy": 0.012
    },
    "tvalues": {
-    "const": -0.417,
-    "ugap": -3.01,
-    "rel_energy": 1.973
+    "const": -0.4166,
+    "ugap": -3.0105,
+    "rel_energy": 1.9732
    },
    "pvalues": {
     "const": 0.677,
@@ -484,9 +484,9 @@
     "rel_energy": 0.0067
    },
    "tvalues": {
-    "const": 0.04,
-    "ugap": -1.969,
-    "rel_energy": -0.81
+    "const": 0.0398,
+    "ugap": -1.9687,
+    "rel_energy": -0.8098
    },
    "pvalues": {
     "const": 0.9683,
@@ -1636,7 +1636,12 @@
   "crit_10pct": 7.17,
   "crit_5pct": 8.85,
   "crit_1pct": 12.35,
-  "note": "sup-Wald on slope-shift dummy, HAC(4); Andrews (1993, 2003) critical values"
+  "note": "sup-Wald on slope-shift dummy, HAC(4); Andrews (1993, 2003) critical values",
+  "p_bootstrap": 0.032,
+  "boot_crit_5pct": 13.5,
+  "boot_crit_1pct": 23.32,
+  "B": 1999,
+  "block_length": 8
  },
  "modern_linear": {
   "name": "linear 2001-2026",
@@ -1651,9 +1656,9 @@
    "gscpi": 0.1711
   },
   "tvalues": {
-   "const": -2.113,
-   "vu": 4.145,
-   "gscpi": 2.078
+   "const": -2.1129,
+   "vu": 4.1445,
+   "gscpi": 2.0779
   },
   "pvalues": {
    "const": 0.0346,
@@ -1663,6 +1668,36 @@
   "nobs": 101,
   "r2": 0.42,
   "r2_adj": 0.4081
+ },
+ "modern_ugap": {
+  "name": "linear u-gap 2001-2026",
+  "params": {
+   "const": 0.4647,
+   "ugap": -0.16,
+   "gscpi": 0.5876
+  },
+  "se": {
+   "const": 0.1449,
+   "ugap": 0.0764,
+   "gscpi": 0.1601
+  },
+  "tvalues": {
+   "const": 3.2074,
+   "ugap": -2.0927,
+   "gscpi": 3.6711
+  },
+  "pvalues": {
+   "const": 0.0013,
+   "ugap": 0.0364,
+   "gscpi": 0.0002
+  },
+  "nobs": 101,
+  "r2": 0.3339,
+  "r2_adj": 0.3203,
+  "rmse_post2020_in_sample": {
+   "vu": 1.199,
+   "ugap": 1.299
+  }
  },
  "modern_kink": {
   "name": "kink at vu=1.18",
@@ -1679,10 +1714,10 @@
    "gscpi": 0.1933
   },
   "tvalues": {
-   "const": 2.469,
-   "below": 1.981,
-   "above": 3.137,
-   "gscpi": 1.549
+   "const": 2.4694,
+   "below": 1.9814,
+   "above": 3.1374,
+   "gscpi": 1.5491
   },
   "pvalues": {
    "const": 0.0135,
@@ -1694,7 +1729,25 @@
   "r2": 0.4478,
   "r2_adj": 0.4308,
   "c_hat": 1.18,
-  "slope_ratio": 3.59
+  "slope_ratio": 3.59,
+  "quarters_above_kink": [
+   "2018Q3",
+   "2018Q4",
+   "2019Q2",
+   "2019Q3",
+   "2019Q4",
+   "2021Q3",
+   "2021Q4",
+   "2022Q1",
+   "2022Q2",
+   "2022Q3",
+   "2022Q4",
+   "2023Q1",
+   "2023Q2",
+   "2023Q3",
+   "2023Q4",
+   "2024Q1"
+  ]
  },
  "kink_test": {
   "supLR": 4.97,
