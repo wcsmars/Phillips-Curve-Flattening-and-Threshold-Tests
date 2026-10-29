@@ -115,7 +115,7 @@ is identical.
 The order is `01_build_dataset.py` → `02_analysis.py` → `03_figures.py` →
 `04_tables.py`. Each script resolves paths from its own location. On Windows,
 run those four scripts with `python` in that order. Estimation includes 499
-linearity-bootstrap and 1,999 slope-break-bootstrap replications and takes
+linearity-bootstrap and 1,999 slope-break-bootstrap replications. Runtime
 depends on the machine and numerical-library build.
 
 ### Offline demo on synthetic data
@@ -136,8 +136,7 @@ known threshold. With the default seed and the pinned packages it estimated
 1.14, and the approximate LR search set (0.92–1.40) contained the planted
 value. Figures and tables are explicitly labeled as synthetic; every number in
 `demo/` is synthetic. Use `--prepare-only` to write the inputs
-without estimating, and `--seed` to draw a different sample. The demo takes
-under a minute. With `--check` it exits with an error unless the default run
+without estimating, and `--seed` to draw a different sample. Runtime depends on the machine. With `--check` it exits with an error unless the default run
 recovers the planted kink; CI runs it this way.
 
 ## Data and method
