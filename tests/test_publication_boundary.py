@@ -63,13 +63,13 @@ class PublicationBoundaryTests(unittest.TestCase):
             "requirements-docs.txt", "tests/test_private_outputs.py",
             ".public-maintenance/validation.json",
         }
-        ignored = set(git("check-ignore", "--no-index", "--stdin",
-                          input="\n".join(sorted(candidates)) + "\n").splitlines())
+        ignored = set(filter(None, git("check-ignore", "--no-index", "--stdin", "-z",
+                                       input="\0".join(sorted(candidates)) + "\0").split("\0")))
         self.assertEqual(ignored, candidates)
 
     def test_reachable_history_contains_only_reviewed_paths(self):
         paths = set(filter(None, git(
-            "log", "--branches", "--tags", "--remotes=origin", "--format=",
+            "log", "HEAD", "--branches", "--tags", "--remotes=origin", "--format=",
             "--name-only", "--no-renames", "--diff-merges=first-parent",
         ).splitlines()))
         self.assertFalse(paths - REVIEWED_FILES, sorted(paths - REVIEWED_FILES))
