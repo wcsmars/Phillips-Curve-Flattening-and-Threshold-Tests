@@ -26,9 +26,22 @@ Thumbs.db
 config.yaml
 config.yml
 credentials/
+credentials.yaml
+credentials.yml
+credentials.json
 private/
+ibkr_credentials*
+brokerage/
+statements/
+execution_logs/
 *.key
 *.pem
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_ed25519
+secrets/
 secrets.*
 
 # Local documents and build scripts
@@ -38,6 +51,11 @@ paper_full.*
 BRIEF.md
 /code/05_assemble.py
 /code/06_fix_docx_xml.py
+/code/07_build_guide.py
+/requirements-docs.txt
+/tests/test_private_outputs.py
+/output/
+/.public-maintenance/
 *.docx
 *.tex
 *.bib

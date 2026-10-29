@@ -238,6 +238,32 @@ synthetic stand-ins locally. `decomposition.csv` includes 26 quarters of the
 processed v/u, GSCPI and Cleveland Fed expectations series. Generated
 Markdown tables are saved to the ignored `tables/` folder.
 
+## Publication scope
+
+The public version contains the complete research implementation, tests,
+selected aggregate results and figures. The synthetic demo runs the same
+estimation pipeline without requiring downloaded inputs. There are no omitted
+signal functions or placeholder implementations. This is a macroeconomic
+research project; it contains no brokerage connection or order-execution system.
+
+Original input files, the full processed dataset, local configuration and
+working documents are excluded. Credentials, account records, statements and
+execution logs must remain outside version control. A fixed tracked-file
+inventory is checked by the test suite and CI; `.gitignore` also excludes local
+data and sensitive file locations. These checks do not turn public files or
+branches into private storage, and ignoring a file does not remove old commits.
+
+Third-party data remain subject to their providers' terms. Public availability
+does not grant blanket redistribution rights. Michigan expectations are
+copyrighted by the University of Michigan; see the
+[series attribution](https://fred.stlouisfed.org/series/MICH) and
+[FRED terms](https://fred.stlouisfed.org/legal/terms/).
+GSCPI source: Federal Reserve Bank of New York, copyright Federal Reserve Bank
+of New York; see its [terms of use](https://www.newyorkfed.org/privacy/termsofuse).
+Quarterly averaging, rounding and fitted contributions in this repository are
+project transformations of the source series, not official provider estimates.
+The source attribution and conditions continue to apply to these excerpts.
+
 ## Validation update: 2026-10-29
 
 The audit aligned bootstrap grids, corrected the threshold-profile statistic
