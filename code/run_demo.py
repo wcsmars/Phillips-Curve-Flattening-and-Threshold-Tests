@@ -10,8 +10,8 @@ are never read or modified.
 The synthetic inflation gap (core inflation minus 1-year expectations) follows
 a kinked curve in the vacancy/unemployment ratio with its threshold at
 PLANTED_KINK, so the run also shows whether the grid search recovers a known
-break. Every number in the workspace is synthetic, even though the figures and
-tables keep the titles of the U.S. study.
+break. Every number in the workspace is synthetic; the figures and tables are
+explicitly labeled so they cannot be mistaken for the empirical study.
 
 Usage (from any working directory):
     python code/run_demo.py                  # inputs + full pipeline
@@ -145,6 +145,8 @@ def write_inputs(raw, seed):
 
 def prepare(workspace, seed):
     """Create the workspace, refusing the checkout itself or a foreign folder."""
+    if not isinstance(seed, (int, np.integer)) or seed < 0:
+        raise SystemExit("run_demo: --seed must be a nonnegative integer; no outputs changed")
     workspace = workspace.resolve()
     if workspace == ROOT or workspace in ROOT.parents:
         raise SystemExit("run_demo: the workspace must not be the checkout or contain it")
@@ -158,9 +160,24 @@ def prepare(workspace, seed):
         if target.is_symlink() or not target.resolve().is_relative_to(workspace):
             raise SystemExit(f"run_demo: {target} points outside the demo workspace; "
                              "remove it or choose another --workspace")
+        if target.is_file() and target.stat().st_nlink > 1:
+            raise SystemExit(f"run_demo: {target} is a hard-linked file; choose another --workspace")
+    # Directory guards alone do not protect existing script/CSV symlinks:
+    # copyfile/to_csv follow them and would overwrite the linked file.
+    for folder in (workspace / "code", workspace / "data" / "raw"):
+        if folder.exists():
+            for target in folder.iterdir():
+                if target.is_symlink():
+                    raise SystemExit(f"run_demo: {target} points outside the demo workspace; "
+                                     "remove the symbolic link or choose another --workspace")
+                if target.is_file() and target.stat().st_nlink > 1:
+                    raise SystemExit(f"run_demo: {target} is a hard-linked file; "
+                                     "choose another --workspace")
     # Outputs of an earlier run would otherwise sit next to inputs from a new seed.
     for name in OUTPUTS:
-        shutil.rmtree(workspace / name, ignore_errors=True)
+        target = workspace / name
+        if target.exists():
+            shutil.rmtree(target)
     code, raw = workspace / "code", workspace / "data" / "raw"
     code.mkdir(parents=True, exist_ok=True)
     raw.mkdir(parents=True, exist_ok=True)

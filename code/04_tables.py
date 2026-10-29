@@ -1,5 +1,6 @@
-"""Render research tables (markdown) from results.json into tables/."""
+"""Render paper tables (markdown) from results.json into tables/."""
 import json
+import math
 import pandas as pd
 from pathlib import Path
 
@@ -10,11 +11,23 @@ TAB.mkdir(parents=True, exist_ok=True)
 
 
 def stars(p):
+    if p is None or not math.isfinite(p):
+        return ""
     return "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.10 else ""
 
 
 def cell(b, se, p):
-    return f"{b:.3f}{stars(p)} ({se:.3f})"
+    return f"{number(b, '.3f')}{stars(p)} ({number(se, '.3f')})"
+
+
+def number(value, spec):
+    return "—" if value is None or not math.isfinite(value) else format(value, spec)
+
+
+def write_table(name, content):
+    if (ROOT / "SYNTHETIC_DEMO.txt").is_file():
+        content = "**SYNTHETIC DEMO: simulated inputs; not U.S. empirical results.**\n\n" + content
+    (TAB / name).write_text(content + "\n", encoding="utf-8", newline="\n")
 
 
 def is_number(value):
@@ -61,7 +74,7 @@ t1 = pd.DataFrame(rows)
 t1_md = ("**Table 1. Descriptive statistics by period — mean (standard deviation), quarterly data**\n\n"
          + markdown(t1)
          + "\n\n*Notes:* v/u available from 2000Q4 (JOLTS); Michigan from 1978; Cleveland Fed from 1982; GSCPI from 1998. 2020–2026Q1 column ends with the last complete quarter (2026Q1).")
-(TAB / "table1_descriptives.md").write_text(t1_md + "\n", encoding="utf-8", newline="\n")
+write_table("table1_descriptives.md", t1_md)
 
 # Table 2: linear Phillips curves --------------------------------------------
 rows = []
@@ -91,12 +104,16 @@ t2_md = ("**Table 2. Linear Phillips-curve estimates across eras**\n\n"
          f"*Notes:* Newey–West (HAC) standard errors with 4 lags in parentheses; \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.10. "
          f"Quandt–Andrews sup-Wald test for an unknown break in κ (1960–2019, 15% trimming): sup-W = {qa['sup_wald']:.2f}, "
          f"estimated break {quarter(qa['break_date'])}; asymptotic 1% critical value {qa['crit_1pct']:.2f} (Andrews 1993, 2003). "
-         f"Because the HAC sup-Wald over-rejects in samples of this size, a fixed-regressor moving-block bootstrap of the "
-         f"no-break model gives the finite-sample p-value: p = {qa['p_bootstrap']:.3f} (B = {qa['B']}, block length {qa['block_length']}).")
-(TAB / "table2_linear_pc.md").write_text(t2_md + "\n", encoding="utf-8", newline="\n")
+         f"An approximate fixed-regressor moving-block bootstrap imposes a stable intercept and slope under the null: "
+         f"p = {qa['p_bootstrap']:.3f} (B = {qa['B']}, block length {qa['block_length']}). "
+         f"Its size is not established under arbitrary intercept breaks or changing conditional volatility.")
+write_table("table2_linear_pc.md", t2_md)
 
 # Table 3: linear vs kinked v/u curve -----------------------------------------
 lin, kink, kt = res["modern_linear"], res["modern_kink"], res["kink_test"]
+aic_note = ("AIC counts the searched threshold as one fitted parameter; this is a heuristic "
+            "comparison under weak threshold identification. " if "aic_kink_conditional" in kt else
+            "AIC treats ĉ as fixed and does not penalize the threshold search. ")
 t3 = pd.DataFrame([
     {"": "v/u (linear)", "(1) Linear": cell(lin["params"]["vu"], lin["se"]["vu"], lin["pvalues"]["vu"]), "(2) Kinked": "—"},
     {"": "v/u below kink", "(1) Linear": "—", "(2) Kinked": cell(kink["params"]["below"], kink["se"]["below"], kink["pvalues"]["below"])},
@@ -106,7 +123,7 @@ t3 = pd.DataFrame([
     {"": "Constant", "(1) Linear": cell(lin["params"]["const"], lin["se"]["const"], lin["pvalues"]["const"]),
      "(2) Kinked": cell(kink["params"]["const"], kink["se"]["const"], kink["pvalues"]["const"])},
     {"": "Kink location ĉ", "(1) Linear": "—", "(2) Kinked": f"{kink['c_hat']:.2f} [approx. LR set {kt['c_ci95'][0]:.2f}–{kt['c_ci95'][1]:.2f}]"},
-    {"": "Slope ratio (above/below)", "(1) Linear": "—", "(2) Kinked": f"{kink['slope_ratio']:.2f}"},
+    {"": "Slope ratio (above/below)", "(1) Linear": "—", "(2) Kinked": number(kink['slope_ratio'], '.2f')},
     {"": "R²", "(1) Linear": f"{lin['r2']:.3f}", "(2) Kinked": f"{kink['r2']:.3f}"},
     {"": "AIC", "(1) Linear": f"{kt['aic_linear']:.1f}", "(2) Kinked": f"{kt['aic_kink']:.1f}"},
     {"": "N", "(1) Linear": str(lin["nobs"]), "(2) Kinked": str(kink["nobs"])},
@@ -117,10 +134,10 @@ t3_md = ("**Table 3. Linear vs. kinked Phillips curve in labor-market tightness,
          f"*Notes:* Newey–West (4 lags) standard errors in parentheses; \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.10. "
          f"Kink located by grid search over v/u ∈ [0.40, 1.40]; approximate LR search set uses the Hansen (2000) cutoff, "
          f"whose coverage is not established here for a continuous kink. Slope standard errors condition on the selected threshold. "
-         f"AIC treats ĉ as fixed and does not penalize the threshold search. "
-         f"sup-LR test of linearity = {kt['supLR']:.2f}, moving-block bootstrap p-value = {kt['p_bootstrap']:.2f} "
+         + aic_note
+         + f"sup-LR test of linearity = {kt['supLR']:.2f}, moving-block bootstrap p-value = {kt['p_bootstrap']:.2f} "
          f"(B = {kt['B']}, block length {kt['block_length']}).")
-(TAB / "table3_kink.md").write_text(t3_md + "\n", encoding="utf-8", newline="\n")
+write_table("table3_kink.md", t3_md)
 
 # Table 4: robustness grid ------------------------------------------------------
 def kink_pattern(label, specs):
@@ -150,8 +167,8 @@ t4_md = ("**Table 4. Robustness of the kinked specification, 2001Q1–2026Q1**\n
          "expectation measure) and supply control; ĉ re-estimated by grid search per specification. Newey–West (4 lags) "
          "standard errors in parentheses; the search grid is v/u ∈ [0.40, 1.40]. "
          + kink_pattern("Cleveland Fed", [x for x in res["robustness"] if x["expectations"] != "mich"]) + " "
-         + kink_pattern("Michigan household", [x for x in res["robustness"] if x["expectations"] == "mich"]))
-(TAB / "table4_robustness.md").write_text(t4_md + "\n", encoding="utf-8", newline="\n")
+         + kink_pattern("Michigan household", [x for x in res["robustness"] if x["expectations"] == "mich"]) + "")
+write_table("table4_robustness.md", t4_md)
 
 # Table 5: decomposition summary -------------------------------------------------
 d = res["decomposition_summary"]
@@ -168,6 +185,6 @@ t5_md = ("**Table 5. Accounting for the surge and the disinflation (kinked model
          + markdown(pd.DataFrame(rows)) + "\n\n"
          "*Notes:* Entries are changes in period-average fitted contributions between the stated windows; components sum to the "
          "actual change up to rounding. The constant nets out of changes.")
-(TAB / "table5_decomposition.md").write_text(t5_md + "\n", encoding="utf-8", newline="\n")
+write_table("table5_decomposition.md", t5_md)
 
 print("tables written:", sorted(p.name for p in TAB.glob("*.md")))

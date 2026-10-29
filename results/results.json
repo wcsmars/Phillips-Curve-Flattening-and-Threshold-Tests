@@ -1637,7 +1637,8 @@
   "crit_5pct": 8.85,
   "crit_1pct": 12.35,
   "note": "sup-Wald on slope-shift dummy, HAC(4); Andrews (1993, 2003) critical values",
-  "p_bootstrap": 0.032,
+  "p_bootstrap": 0.0325,
+  "pvalue_method": "(1 + exceedances) / (B + 1)",
   "boot_crit_5pct": 13.5,
   "boot_crit_1pct": 23.32,
   "B": 1999,
@@ -1751,15 +1752,21 @@
  },
  "kink_test": {
   "supLR": 4.97,
-  "p_bootstrap": 0.2084,
+  "p_bootstrap": 0.21,
   "B": 499,
+  "pvalue_method": "(1 + exceedances) / (B + 1)",
   "block_length": 8,
+  "grid_points": 101,
+  "grid_step": 0.01,
   "aic_linear": 254.8,
-  "aic_kink": 251.8,
+  "aic_kink": 253.8,
+  "aic_kink_conditional": 251.8,
+  "aic_note": "kink AIC counts the searched threshold; heuristic under nonregular threshold inference",
   "c_ci95": [
    0.4,
    1.4
-  ]
+  ],
+  "search_set_note": "normalized SSR distance with borrowed 7.35 cutoff; not a calibrated 95% confidence set for this continuous kink"
  },
  "decomposition_summary": {
   "surge_vs_prepandemic": {

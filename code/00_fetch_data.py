@@ -48,6 +48,7 @@ def validate_csv(payload, series):
             or header[0].lower() not in {"date", "observation_date"}):
         raise ValueError(f"{series}: unexpected CSV columns: {header!r}")
     dates = []
+    periods = set()
     numeric_count = 0
     for row in rows:
         if not row:
@@ -55,12 +56,29 @@ def validate_csv(payload, series):
         if len(row) != 2:
             raise ValueError(f"{series}: expected two columns per observation")
         observation_date = date.fromisoformat(row[0])
+        if row[0] != observation_date.isoformat():
+            raise ValueError(f"{series}: dates must use YYYY-MM-DD")
         if dates and observation_date <= dates[-1]:
             raise ValueError(f"{series}: dates must be unique and increasing")
+        period = (observation_date.year, (observation_date.month - 1) // 3
+                  if series == "NROU" else observation_date.month)
+        if period in periods:
+            raise ValueError(f"{series}: multiple observations in one source period")
+        periods.add(period)
         value = row[1].strip()
         if value not in {"", "."}:
-            if not math.isfinite(float(value)):
+            numeric = float(value)
+            if not math.isfinite(numeric):
                 raise ValueError(f"{series}: nonfinite observation")
+            if series in {"CPIAUCSL", "CPILFESL", "PCEPILFE", "PCEPI", "CPIENGSL",
+                          "UNEMPLOY"} and numeric <= 0:
+                raise ValueError(f"{series}: observations must be positive")
+            if series in {"UNRATE", "NROU"} and not 0 <= numeric <= 100:
+                raise ValueError(f"{series}: percentage outside [0, 100]")
+            if series == "JTSJOL" and numeric < 0:
+                raise ValueError(f"{series}: job openings cannot be negative")
+            if series == "USREC" and numeric not in {0, 1}:
+                raise ValueError(f"{series}: recession indicator must be 0 or 1")
             numeric_count += 1
         dates.append(observation_date)
     if not dates or not numeric_count:
@@ -85,11 +103,21 @@ def parse_gscpi_workbook(payload):
     frame.columns = [str(column).strip().casefold() for column in frame.columns]
     if not {"date", "gscpi"}.issubset(frame.columns):
         raise ValueError("GSCPI: monthly sheet must contain Date and GSCPI columns")
-    dates = frame["date"].map(lambda value: pd.to_datetime(value, errors="coerce"))
+    # Untyped numeric cells are not nanosecond timestamps. Proper Excel dates
+    # arrive as datetime values from the workbook engine.
+    dates = frame["date"].map(lambda value: pd.NaT if isinstance(value, (int, float))
+                              else pd.to_datetime(value, errors="coerce"))
     values = pd.to_numeric(frame["gscpi"], errors="coerce")
-    valid = dates.notna() & values.notna() & values.map(
+    finite = values.notna() & values.map(
         lambda value: math.isfinite(value)
     )
+    # A footer is not an observation. A dated row with a broken value is, and
+    # silently dropping it would hide corruption or shorten the usable history.
+    if (dates.notna() & ~finite).any():
+        raise ValueError("GSCPI: dated observation has a missing or invalid value")
+    if (dates.isna() & finite).any():
+        raise ValueError("GSCPI: numeric observation has a missing or invalid date")
+    valid = dates.notna() & finite
     output = pd.DataFrame({"date": dates[valid], "gscpi": values[valid]})
     output = output.sort_values("date")
     # LF on every platform, so the file and its recorded checksum do not depend on the OS.
@@ -150,6 +178,22 @@ def existing_coverage(destination, series):
         return None
 
 
+def source_period(value, series):
+    """Comparable calendar period for either quarterly or monthly sources."""
+    return (int(value[:4]), (int(value[5:7]) - 1) // 3
+            if series == "NROU" else int(value[5:7]))
+
+
+def numeric_periods(payload, series):
+    """Periods with observed values, independent of month-start/end labels."""
+    rows = csv.reader(io.StringIO(payload.decode("utf-8-sig")))
+    next(rows)
+    return {
+        source_period(row[0], series)
+        for row in rows if row and row[1].strip() not in {"", "."}
+    }
+
+
 def prepare(series, raw_dir, force=False, timeout=30, attempts=3):
     """Download and validate one input without writing anything."""
     raw_dir = Path(raw_dir)
@@ -165,17 +209,21 @@ def prepare(series, raw_dir, force=False, timeout=30, attempts=3):
     payload = parse_gscpi_workbook(source) if series == "GSCPI" else source
     metadata = validate_csv(payload, series)
     # A refresh may revise values but must not silently shorten or thin the history.
-    # Months are compared, so a switch between month-start and month-end dates passes.
-    if current is not None and (metadata["first_date"][:7] > current["first_date"][:7]
-                                or metadata["last_date"][:7] < current["last_date"][:7]
-                                or metadata["numeric_observations"]
-                                < current["numeric_observations"]):
+    # Calendar periods are compared so start/end date labels are interchangeable.
+    if current is not None and (
+            source_period(metadata["first_date"], series)
+            > source_period(current["first_date"], series)
+            or source_period(metadata["last_date"], series)
+            < source_period(current["last_date"], series)
+            or metadata["numeric_observations"] < current["numeric_observations"]
+            or not numeric_periods(destination.read_bytes(), series)
+            <= numeric_periods(payload, series)):
         raise ValueError(
             f"{series}: new download covers {metadata['first_date']} to "
             f"{metadata['last_date']} with {metadata['numeric_observations']} values, "
             f"less than the existing {current['first_date']} to {current['last_date']} "
             f"with {current['numeric_observations']}; delete {destination.name} "
-            "to accept the shorter series")
+            "to accept the shorter or historically incomplete series")
     plan.update(payload=payload, metadata=metadata, action="downloaded",
                 retrieved_at=datetime.now(timezone.utc).isoformat(),
                 source_sha256=hashlib.sha256(source).hexdigest())
@@ -183,12 +231,14 @@ def prepare(series, raw_dir, force=False, timeout=30, attempts=3):
 
 
 def commit(plan):
-    """Write a prepared input and its provenance record."""
+    """Write a prepared input and provenance; roll back on an ordinary I/O failure.
+
+    Each replacement is atomic, but two paths cannot be committed atomically
+    across a process/machine crash. Checksums make such interruptions detectable.
+    """
     series, payload, metadata = plan["series"], plan["payload"], plan["metadata"]
     destination, provenance, action = plan["destination"], plan["provenance"], plan["action"]
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if action == "downloaded":
-        atomic_write(destination, payload)
     retrieved_at, source_sha256 = plan["retrieved_at"], plan["source_sha256"]
     digest = hashlib.sha256(payload).hexdigest()
     # Preserve the actual retrieval time on reuse; never invent an old vintage.
@@ -200,7 +250,7 @@ def commit(plan):
                 return
         except (ValueError, OSError):
             pass
-    metadata.update({
+    metadata = {**metadata,
         "series": series,
         "source_url": source_url(series),
         "sha256": digest,
@@ -209,8 +259,26 @@ def commit(plan):
         "validated_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": action,
         "vintage_note": "Current source vintage when downloaded; historical revisions may differ.",
-    })
-    atomic_write(provenance, (json.dumps(metadata, indent=2) + "\n").encode("utf-8"))
+    }
+    writes = [(destination, payload)] if action == "downloaded" else []
+    writes.append((provenance, (json.dumps(metadata, indent=2) + "\n").encode("utf-8")))
+    previous = {path: path.read_bytes() if path.exists() else None for path, _ in writes}
+    written = []
+    try:
+        for path, contents in writes:
+            atomic_write(path, contents)
+            written.append(path)
+    except OSError as error:
+        for path in reversed(written):
+            try:
+                if previous[path] is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write(path, previous[path])
+            except OSError as rollback_error:
+                raise OSError(f"{error}; rollback of {path.name} also failed: "
+                              f"{rollback_error}") from error
+        raise
     print(f"{series}: {action} {metadata['rows']} rows")
 
 

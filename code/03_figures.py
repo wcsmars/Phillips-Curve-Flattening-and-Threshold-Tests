@@ -1,4 +1,4 @@
-"""Produce all research figures (PNG, 200 dpi) into figures/."""
+"""Produce all paper figures (PNG, 200 dpi) into figures/."""
 import json
 import numpy as np
 import pandas as pd
@@ -13,15 +13,27 @@ FIG = ROOT / "figures"; FIG.mkdir(exist_ok=True)
 df = pd.read_csv(ROOT / "data/processed/quarterly.csv",
                  parse_dates=["quarter"]).set_index("quarter")
 res = json.loads((ROOT / "results" / "results.json").read_text(encoding="utf-8"))
-rec = pd.read_csv(ROOT / "data/raw/USREC.csv")
+rec = pd.read_csv(ROOT / "data/raw/USREC.csv", na_values=["."])
 rec.columns = ["date", "usrec"]
 rec["date"] = pd.to_datetime(rec["date"])
 rec = rec.set_index("date")["usrec"]
+rec = pd.to_numeric(rec, errors="raise").sort_index()
+if rec.index.has_duplicates or not rec.dropna().isin([0, 1]).all():
+    raise ValueError("USREC must have unique dates and only 0, 1 or missing observations")
 
 plt.rcParams.update({"font.size": 10, "axes.titlesize": 11,
                      "axes.spines.top": False, "axes.spines.right": False,
                      "figure.dpi": 200})
 BLUE, RED, GREY, GOLD, GREEN = "#1f4e79", "#b03a2e", "#7f8c8d", "#b7950b", "#1e8449"
+
+
+def save_figure(fig, path):
+    if (ROOT / "SYNTHETIC_DEMO.txt").is_file():
+        for ax in fig.axes:
+            ax.set_title("SYNTHETIC DEMO\n" + ax.get_title())
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def shade_recessions(ax, start, end):
@@ -30,11 +42,13 @@ def shade_recessions(ax, start, end):
     for d, v in r.items():
         if v == 1 and not in_rec:
             rs, in_rec = d, True
-        elif v == 0 and in_rec:
+        elif v != 1 and in_rec:
             ax.axvspan(rs, d, color="grey", alpha=0.18, lw=0)
             in_rec = False
     if in_rec:
-        ax.axvspan(rs, r.index[-1], color="grey", alpha=0.18, lw=0)
+        # Monthly indicators describe the full month, including the last row.
+        ax.axvspan(rs, r.index[-1] + pd.offsets.MonthBegin(1),
+                   color="grey", alpha=0.18, lw=0)
 
 
 # Figure 1: inflation history -------------------------------------------------
@@ -46,7 +60,7 @@ shade_recessions(ax, "1960-01-01", "2026-03-01")
 ax.axhline(2, color="black", lw=0.6, ls=":")
 ax.set_ylabel("Percent"); ax.legend(frameon=False, loc="upper right")
 ax.set_title("U.S. consumer price inflation, 1960–2026")
-fig.tight_layout(); fig.savefig(FIG / "fig1_inflation_history.png"); plt.close(fig)
+save_figure(fig, FIG / "fig1_inflation_history.png")
 
 # Figure 2: Phillips scatter by era ------------------------------------------
 fig, ax = plt.subplots(figsize=(7, 4.6))
@@ -66,7 +80,7 @@ ax.set_xlabel("Unemployment gap (u − u*, pp)")
 ax.set_ylabel("Inflation surprise (π − πᵉ, pp, annualized)")
 ax.legend(frameon=False)
 ax.set_title("The flattening Phillips curve: inflation vs. slack by era")
-fig.tight_layout(); fig.savefig(FIG / "fig2_pc_scatter_eras.png"); plt.close(fig)
+save_figure(fig, FIG / "fig2_pc_scatter_eras.png")
 
 # Figure 3: rolling slope ------------------------------------------------------
 roll = pd.DataFrame(res["rolling_slope"])
@@ -79,7 +93,7 @@ ax.axhline(0, color="black", lw=0.7)
 shade_recessions(ax, str(roll["end"].iloc[0].date()), "2026-03-01")
 ax.set_ylabel("Slope $\\kappa$ on unemployment gap")
 ax.set_title("Rolling 60-quarter Phillips-curve slope (90% confidence band)")
-fig.tight_layout(); fig.savefig(FIG / "fig3_rolling_slope.png"); plt.close(fig)
+save_figure(fig, FIG / "fig3_rolling_slope.png")
 
 # Figure 4: v/u ratio ----------------------------------------------------------
 c_hat = res["modern_kink"]["c_hat"]
@@ -88,11 +102,11 @@ s = df.loc["2001-01-01":, "vu"].dropna()
 ax.plot(s.index, s.values, color=BLUE, lw=1.8)
 ax.axhline(c_hat, color=RED, lw=1.2, ls="--",
            label=f"Estimated kink ($\\hat{{c}}$ = {c_hat:.2f})")
-ax.axhline(1.0, color=GREY, lw=0.8, ls=":", label="v/u = 1 (one job per job-seeker)")
+ax.axhline(1.0, color=GREY, lw=0.8, ls=":", label="v/u = 1 (one vacancy per unemployed person)")
 shade_recessions(ax, "2001-01-01", "2026-03-01")
 ax.set_ylabel("Vacancies / unemployed (v/u)"); ax.legend(frameon=False, loc="upper left")
 ax.set_title("Labor-market tightness, 2001–2026")
-fig.tight_layout(); fig.savefig(FIG / "fig4_vu_timeseries.png"); plt.close(fig)
+save_figure(fig, FIG / "fig4_vu_timeseries.png")
 
 # Figure 5: kinked Phillips curve in v/u space --------------------------------
 mod = df.loc["2001-01-01":"2026-01-01"].copy()
@@ -115,7 +129,7 @@ ax.set_xlabel("Vacancy-to-unemployment ratio (v/u)")
 ax.set_ylabel("Core CPI inflation − expected (net of supply), pp")
 ax.legend(frameon=False, loc="upper left")
 ax.set_title("Inflation gap vs. labor-market tightness with fitted kink, 2001–2026")
-fig.tight_layout(); fig.savefig(FIG / "fig5_kink_scatter.png"); plt.close(fig)
+save_figure(fig, FIG / "fig5_kink_scatter.png")
 
 # Figure 6: decomposition ------------------------------------------------------
 dec = pd.read_csv(ROOT / "results/decomposition.csv",
@@ -145,7 +159,7 @@ ax.set_xticklabels([f"{q.year}Q{q.quarter}" for q in comp.index][::2],
 ax.axhline(0, color="black", lw=0.6)
 ax.set_ylabel("Percentage points"); ax.legend(frameon=False, fontsize=8.5, ncol=2)
 ax.set_title("Decomposing the surge and the disinflation, 2020–2026 (kinked model)")
-fig.tight_layout(); fig.savefig(FIG / "fig6_decomposition.png"); plt.close(fig)
+save_figure(fig, FIG / "fig6_decomposition.png")
 
 # Figure 7: out-of-sample disinflation test -----------------------------------
 oos = pd.DataFrame(res["oos_pre2023"]["path"])
@@ -162,6 +176,6 @@ ax.text(pd.Timestamp("2023-02-15"), ax.get_ylim()[1] * 0.95, "out of sample →"
         fontsize=8.5, color=GREY)
 ax.set_ylabel("Percent (annualized)"); ax.legend(frameon=False, fontsize=9)
 ax.set_title("Holdout projections conditional on realized inputs, 2023–2026")
-fig.tight_layout(); fig.savefig(FIG / "fig7_oos.png"); plt.close(fig)
+save_figure(fig, FIG / "fig7_oos.png")
 
 print("figures written:", sorted(p.name for p in FIG.glob("*.png")))

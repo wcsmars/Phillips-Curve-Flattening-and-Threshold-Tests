@@ -29,11 +29,12 @@ quarters from 2001Q1 to 2026Q1.
 | Holdout RMSE, trained through 2022Q4 (2023Q1–2026Q1), linear vs. kinked | 0.883 vs. 0.795 percentage points |
 | Holdout RMSE, trained through 2019Q4 (2020Q1–2026Q1), linear vs. kinked | 1.808 vs. 1.814; the trained kink sits at the 0.40 grid edge |
 
-The slope break is clear, but the asymptotic critical values overstate its
-significance in a sample of this size. A moving-block bootstrap of the
-no-break model puts the p-value at 0.032 with the saved seed. A one-off check
-outside the pipeline gave 0.016 to 0.034 across 300 other seeds, so the break
-is significant at 5% but not at 1%.
+A moving-block bootstrap of the stable-intercept-and-slope no-break model
+puts the slope-break p-value at 0.0325 with the saved seed, significant at 5%
+but not at 1%. This is an approximation under the maintained residual-process
+assumptions. A difference from the asymptotic reference values does not itself
+establish over-rejection or finite-sample size control. The earlier 300-seed
+range is not a validation of the revised bootstrap implementation.
 
 Both holdout comparisons re-estimate each model, including the threshold, on
 the training quarters only, then project with realized expectations,
@@ -101,8 +102,7 @@ Downloads and processed datasets are local and ignored by Git. Network access
 is needed for downloading; no API key is required.
 
 The full pipeline has been checked against the original local inputs and
-reproduces the saved estimates. Live acquisition was checked for UNRATE and
-GSCPI; the offline tests cover input parsing and failed-download handling.
+reproduces the saved estimates. On October 29, 2026, live acquisition was checked for all 14 inputs; the offline tests cover input parsing and failed-download handling.
 
 New downloads may revise historical values, so a fresh run can differ from
 the bundled results. Exact numerical replication requires the original input
@@ -116,7 +116,7 @@ The order is `01_build_dataset.py` → `02_analysis.py` → `03_figures.py` →
 `04_tables.py`. Each script resolves paths from its own location. On Windows,
 run those four scripts with `python` in that order. Estimation includes 499
 linearity-bootstrap and 1,999 slope-break-bootstrap replications and takes
-under a minute on a typical laptop.
+depends on the machine and numerical-library build.
 
 ### Offline demo on synthetic data
 
@@ -134,8 +134,8 @@ synthetic inflation gap has a kink planted at v/u = 1.0, with slopes of 0.5
 below and 3.5 above, so the run shows whether the grid search recovers a
 known threshold. With the default seed and the pinned packages it estimated
 1.14, and the approximate LR search set (0.92–1.40) contained the planted
-value. Figure and table titles still describe the U.S. study, but every
-number in `demo/` is synthetic. Use `--prepare-only` to write the inputs
+value. Figures and tables are explicitly labeled as synthetic; every number in
+`demo/` is synthetic. Use `--prepare-only` to write the inputs
 without estimating, and `--seed` to draw a different sample. The demo takes
 under a minute. With `--check` it exits with an error unless the default run
 recovers the planted kink; CI runs it this way.
@@ -162,13 +162,16 @@ its usage terms.
 Monthly observations are averaged within calendar quarters, and the build
 step lists any quarter averaged from fewer than three months. The source files
 have no October 2025 value for CPIAUCSL, CPILFESL, CPIENGSL, UNRATE or
-UNEMPLOY, because BLS did not collect them during the federal shutdown. Their
+UNEMPLOY, because BLS did not collect them during the federal shutdown
+([CPI release](https://www.bls.gov/news.release/archives/cpi_12182025.htm),
+[employment release](https://www.bls.gov/news.release/archives/empsit_12162025.htm)). Their
 2025Q4 values therefore average November and December. Compared with
 interpolating October, this raises annualized 2025Q4 inflation and lowers
 2026Q1 inflation by about 0.37 percentage points for headline CPI and 0.28 for
-core CPI. In a one-off check outside the pipeline, interpolating October moved
-no estimate in the Results table by more than 0.02 and left the linearity
-p-value unchanged.
+core CPI. An isolated rerun on October 29, 2026 interpolated only those five missing
+October values. The selected kink and bootstrap p-values were unchanged;
+the 2023-2026 holdout RMSEs changed from 0.883/0.795 to 0.900/0.814 for the
+linear/kinked models. The original observations remain the default.
 
 Inflation is `400 × log(Pq / Pq−1)` for quarterly annualized rates and
 `100 × log(Pq / Pq−4)` for year-over-year rates. The unemployment gap is
@@ -198,17 +201,22 @@ A robustness grid re-estimates the kinked model for three inflation
 measures, three expectations proxies and two supply controls.
 
 Inference is exploratory. Both bootstraps resample eight-quarter blocks. The
-linearity bootstrap (499 replications) uses seed 42 and a coarser threshold
-grid than the observed statistic.
+linearity bootstrap (499 replications) uses seed 42 and the same 0.01-step threshold
+grid as the observed statistic. Both tests use the add-one Monte Carlo
+formula `(1 + exceedances) / (B + 1)`, so finite simulations never report zero.
 The stored `c_ci95` bounds are an approximate LR search set: the borrowed
 threshold cutoff has not been calibrated for this continuous-kink model.
-Because the kinked model nests the linear one, no grid point can exceed the
-linearity statistic (sup-LR 4.97), which is below the 7.35 cutoff, so the set
-necessarily covers the whole grid. The slope-break p-value comes from a
+Because the kinked model nests the linear one, the largest normalized SSR distance on the profile is bounded by about
+5.10, below the 7.35 cutoff, so the set necessarily covers the whole grid.
+The search profile uses `n * (SSR(c) - SSR_min) / SSR_min`. The slope-break p-value comes from a
 fixed-regressor moving-block bootstrap of the no-break model (1,999
-replications over every trimmed break date, with its own seed) because the
-asymptotic critical values over-reject here.
-Reported slope standard errors condition on the selected threshold. The
+replications over every trimmed break date, with its own seed) under a stable no-break null. Residual blocks preserve local serial
+dependence but do not guarantee validity under arbitrary intercept or
+conditional-variance breaks.
+The kink AIC counts the searched threshold (253.8 versus 254.8 for the linear
+model); its conditional value before that penalty is retained as 251.8. This
+is a selection heuristic for a nonregular model. Reported slope standard
+errors condition on the selected threshold. The
 results do not establish a nonlinear Phillips curve or causal effects.
 
 ## Files
@@ -230,3 +238,13 @@ Raw inputs and the processed dataset are not bundled; the demo generates
 synthetic stand-ins locally. `decomposition.csv` includes 26 quarters of the
 processed v/u, GSCPI and Cleveland Fed expectations series. Generated
 Markdown tables are saved to the ignored `tables/` folder.
+
+## Validation update: 2026-10-29
+
+The audit aligned bootstrap grids, corrected the threshold-profile statistic
+and AIC count, added strict source and calendar validation, repaired small
+holdout prediction cases, and hardened demo output isolation. New regression
+tests cover these failures with independent numerical checks. Coefficients,
+standard errors, holdout projections and decomposition values remain unchanged.
+The original input vintage is preserved; fresh PCE and GSCPI downloads contain
+historical revisions and are not substituted into the saved estimates.
